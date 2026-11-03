@@ -10,5 +10,8 @@ files:
 mac:
   category: public.app-category.productivity
   target: dmg
-  # Unsigned for now. Code signing and notarization come with the packaging milestone.
-  identity: null
+  # Ad-hoc signature: enough to run on the Mac that built the app (Apple Silicon
+  # refuses unsigned code). A Developer ID certificate, hardened runtime and
+  # notarization come later, when the app is shared with other Macs.
+  identity: '-'
+  hardenedRuntime: false
