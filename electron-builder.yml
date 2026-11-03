@@ -1,0 +1,14 @@
+appId: io.github.dennstedtb.mailclient
+productName: MailClient
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+mac:
+  category: public.app-category.productivity
+  target: dmg
+  # Unsigned for now. Code signing and notarization come with the packaging milestone.
+  identity: null
