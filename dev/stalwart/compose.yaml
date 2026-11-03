@@ -1,0 +1,21 @@
+# Local test mail server (Stalwart 1.x) for development.
+# Provides IMAP, SMTP submission and CalDAV in one container.
+# All ports are bound to 127.0.0.1 only. Setup steps: docs/dev-mail-server.md
+services:
+  stalwart:
+    image: stalwartlabs/stalwart:v1
+    container_name: mailclient-stalwart
+    init: true
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:1993:993' # IMAP over TLS
+      - '127.0.0.1:1465:465' # SMTP submission over TLS
+      - '127.0.0.1:8443:443' # HTTPS: web admin, CalDAV, JMAP
+      - '127.0.0.1:18080:8080' # HTTP: first-run setup wizard and recovery
+    volumes:
+      - stalwart-etc:/etc/stalwart
+      - stalwart-data:/var/lib/stalwart
+
+volumes:
+  stalwart-etc:
+  stalwart-data:

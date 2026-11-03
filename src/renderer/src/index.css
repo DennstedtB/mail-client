@@ -1,0 +1,104 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens.
+ * Quiet, native chrome in the system font; the message itself is the focus,
+ * set in a reading serif. One accent: petrol, used for unread, selection and focus.
+ */
+:root {
+  --paper: #fcfcfb; /* reading pane */
+  --surface: #f5f6f6; /* message list */
+  --sidebar: #eceeef;
+  --ink: #1b1e22;
+  --ink-muted: #5c636b;
+  --ink-faint: #858b92;
+  --line: #e1e4e6;
+  --accent: #1e6b73;
+  --accent-soft: #d9eaeb;
+  --accent-contrast: #ffffff;
+  --selection: #1e6b73; /* focused list selection */
+  --selection-ink: #ffffff;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #1d1f22;
+    --surface: #191b1e;
+    --sidebar: #151719;
+    --ink: #e7e9eb;
+    --ink-muted: #a3a9af;
+    --ink-faint: #767d84;
+    --line: #2b2f33;
+    --accent: #6cc0c8;
+    --accent-soft: #213a3e;
+    --accent-contrast: #0e2427;
+    --selection: #275f66;
+    --selection-ink: #f1fafb;
+  }
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-sidebar: var(--sidebar);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-selection: var(--selection);
+  --color-selection-ink: var(--selection-ink);
+
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', system-ui, sans-serif;
+  --font-serif: 'Source Serif 4 Variable', 'Iowan Old Style', Georgia, serif;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--surface);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    cursor: default;
+  }
+
+  /* Text people read or copy stays selectable. */
+  .selectable {
+    user-select: text;
+    cursor: auto;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      transition: none !important;
+      animation: none !important;
+    }
+  }
+}
+
+@utility drag-region {
+  -webkit-app-region: drag;
+}
+
+@utility no-drag {
+  -webkit-app-region: no-drag;
+}
