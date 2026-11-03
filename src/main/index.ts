@@ -1,13 +1,27 @@
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { app, BrowserWindow, nativeTheme, session, shell, type IpcMainInvokeEvent } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  nativeTheme,
+  safeStorage,
+  session,
+  shell,
+  type IpcMainInvokeEvent,
+} from 'electron'
 import type { Api } from '@shared/ipc-contract'
+import { AccountService, toAccount } from './accounts/account-service'
+import { AccountStore } from './accounts/account-store'
+import { EncryptedSecretStore, type Cipher } from './accounts/secret-store'
 import { createAppUrlCheck } from './app-url'
 import { registerApi } from './ipc'
+import { connectionChecker } from './providers/imap-smtp/check-connection'
+import { ImapSmtpMailProvider } from './providers/imap-smtp/imap-smtp-mail-provider'
 import { MockMailProvider } from './providers/mock/mock-mail-provider'
 import { MailService } from './services/mail-service'
 
-const MILESTONE = 'M0'
+const MILESTONE = 'M1'
 const RENDERER_INDEX = join(__dirname, '../renderer/index.html')
 const DEV_SERVER_URL = app.isPackaged ? undefined : process.env['ELECTRON_RENDERER_URL']
 
@@ -23,7 +37,44 @@ function isTrustedSender(event: IpcMainInvokeEvent): boolean {
   return isAppUrl(event.senderFrame?.url ?? '')
 }
 
+/** Only for headless tests on Linux in development; never in the packaged app. */
+const allowWeakSecretStore =
+  !app.isPackaged && process.env['MAILCLIENT_ALLOW_WEAK_SECRET_STORE'] === '1'
+
+/**
+ * Electron's safeStorage: on macOS the key lives in the Keychain. On Linux
+ * without a keyring it would fall back to a fixed key ("basic_text"), which
+ * is not real protection, so that counts as unavailable unless explicitly
+ * allowed for tests.
+ */
+const keychainCipher: Cipher = {
+  async isAvailable() {
+    if (!(await safeStorage.isAsyncEncryptionAvailable())) return false
+    const weak =
+      process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text'
+    return !weak || allowWeakSecretStore
+  },
+  encrypt: (plainText) => safeStorage.encryptStringAsync(plainText),
+  async decrypt(encrypted) {
+    const { result, shouldReEncrypt } = await safeStorage.decryptStringAsync(encrypted)
+    return { plainText: result, reEncrypt: shouldReEncrypt }
+  },
+}
+
 function createApi(): Api {
+  // ~/Library/Application Support/MailClient on macOS
+  const dataDir = app.getPath('userData')
+  const accounts = new AccountService({
+    store: new AccountStore(join(dataDir, 'accounts.json')),
+    secrets: new EncryptedSecretStore(join(dataDir, 'credentials.json'), keychainCipher),
+    checker: connectionChecker,
+    createProvider: (account, getPassword) =>
+      new ImapSmtpMailProvider(toAccount(account), account.settings, getPassword),
+    sampleProvider: new MockMailProvider(),
+    newId: randomUUID,
+    now: () => new Date(),
+  })
+
   return {
     app: {
       getInfo: async () => ({
@@ -31,9 +82,11 @@ function createApi(): Api {
         version: app.getVersion(),
         platform: process.platform,
         milestone: MILESTONE,
+        isDevelopment: !app.isPackaged,
       }),
     },
-    mail: new MailService([new MockMailProvider()]),
+    accounts,
+    mail: new MailService(accounts),
   }
 }
 
@@ -81,6 +134,7 @@ function createWindow(): BrowserWindow {
 }
 
 void app.whenReady().then(() => {
+  if (allowWeakSecretStore) safeStorage.setUsePlainTextEncryption(true)
   // No camera, microphone, notifications, geolocation etc. until a feature needs it.
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) =>
     callback(false),

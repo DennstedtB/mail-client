@@ -15,8 +15,10 @@ export type AccountKind = 'mock' | 'imap' | 'graph'
 
 export interface Account {
   id: AccountId
-  /** Display name chosen by the user, e.g. "Work". */
+  /** Label chosen by the user, e.g. "Work". */
   name: string
+  /** Name recipients see in the From line. */
+  senderName: string
   email: string
   kind: AccountKind
 }

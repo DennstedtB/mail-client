@@ -12,11 +12,20 @@ interface MessageListProps {
   onSelect: (id: MessageId) => void
   /** Reference date for relative dates ("Yesterday"); changes at midnight. */
   today: Date
+  /** Shown instead of messages when the list has nothing to load, e.g. a feature still to come. */
+  note?: string
 }
 
 const optionId = (id: MessageId) => `message-${id}`
 
-export function MessageList({ folder, messages, selectedId, onSelect, today }: MessageListProps) {
+export function MessageList({
+  folder,
+  messages,
+  selectedId,
+  onSelect,
+  today,
+  note,
+}: MessageListProps) {
   const listRef = useRef<HTMLUListElement>(null)
   const items = messages.status === 'ready' ? messages.data : []
 
@@ -66,6 +75,7 @@ export function MessageList({ folder, messages, selectedId, onSelect, today }: M
         </label>
       </div>
 
+      {messages.status === 'idle' && note && <ListNote>{note}</ListNote>}
       {messages.status === 'loading' && <ListNote>Loading messages…</ListNote>}
       {messages.status === 'error' && <ListNote>{messages.message}</ListNote>}
       {messages.status === 'ready' && items.length === 0 && (

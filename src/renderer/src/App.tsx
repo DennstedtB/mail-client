@@ -1,59 +1,82 @@
 import { useState } from 'react'
-import type { FolderId, MessageId, MessageSummary } from '@shared/types/mail'
+import type { Account, MessageId, MessageSummary } from '@shared/types/mail'
+import { AddAccountDialog } from './components/AddAccountDialog'
 import { CalendarPlaceholder } from './components/CalendarPlaceholder'
 import { MessageList } from './components/MessageList'
 import { ReadingPane } from './components/ReadingPane'
-import { Sidebar, type View } from './components/Sidebar'
+import { RemoveAccountDialog } from './components/RemoveAccountDialog'
+import { Sidebar, type AccountFolders, type FolderSelection, type View } from './components/Sidebar'
+import { errorMessage } from './lib/errors'
 import { useAsync, type AsyncState } from './lib/use-async'
 import { useToday } from './lib/use-today'
 
 const api = window.api
 
+/** Reading messages from real accounts comes with the local cache in M2. */
+const MESSAGES_LATER =
+  'Reading messages arrives in M2. The folders on the left come from your server.'
+
 export function App() {
   const [view, setView] = useState<View>('mail')
-  const [chosenFolderId, setChosenFolderId] = useState<FolderId | null>(null)
+  const [chosen, setChosen] = useState<
+    FolderSelection | { accountId: string; folderId: null } | null
+  >(null)
   const [selectedMessageId, setSelectedMessageId] = useState<MessageId | null>(null)
+  const [accountsVersion, setAccountsVersion] = useState(0)
+  const [adding, setAdding] = useState(false)
+  const [removing, setRemoving] = useState<Account | null>(null)
   const today = useToday()
 
   const appInfo = useAsync('app-info', () => api.app.getInfo())
-  const accounts = useAsync('accounts', () => api.mail.listAccounts())
+  const accounts = useAsync(`accounts:${accountsVersion}`, () => api.accounts.list())
+  const accountList = accounts.status === 'ready' ? accounts.data : null
 
-  // v1 shows one account; the data model already supports several.
-  const account = accounts.status === 'ready' ? accounts.data[0] : undefined
-
-  const folders = useAsync(account ? `folders:${account.id}` : null, () =>
-    api.mail.listFolders(account!.id),
+  // Folders of all accounts, loaded side by side. One failing account doesn't hide the others.
+  const folders = useAsync(
+    accountList ? `folders:${accountsVersion}:${accountList.map((a) => a.id).join(',')}` : null,
+    () =>
+      Promise.all(
+        (accountList ?? []).map(async (account): Promise<AccountFolders> => {
+          try {
+            return {
+              accountId: account.id,
+              status: 'ready',
+              folders: await api.mail.listFolders(account.id),
+            }
+          } catch (error) {
+            return { accountId: account.id, status: 'error', message: errorMessage(error) }
+          }
+        }),
+      ),
   )
-  const folderList = folders.status === 'ready' ? folders.data : []
-  const folder =
-    folderList.find((f) => f.id === chosenFolderId) ?? folderList.find((f) => f.role === 'inbox')
 
-  const messages = useAsync(account && folder ? `messages:${account.id}:${folder.id}` : null, () =>
-    api.mail.listMessages(account!.id, folder!.id),
+  // Selected folder: the one the user chose, otherwise the inbox of the chosen (or first) account.
+  const selection = resolveSelection(chosen, accountList, folders)
+  const account = accountList?.find((a) => a.id === selection?.accountId)
+  const accountFolders =
+    folders.status === 'ready'
+      ? folders.data.find((f) => f.accountId === selection?.accountId)
+      : undefined
+  const folder =
+    accountFolders?.status === 'ready'
+      ? accountFolders.folders.find((f) => f.id === selection?.folderId)
+      : undefined
+
+  const showsMessages = account?.kind === 'mock'
+  const messages = useAsync(
+    showsMessages && folder ? `messages:${folder.accountId}:${folder.id}` : null,
+    () => api.mail.listMessages(folder!.accountId, folder!.id),
   )
   const messageInList =
     messages.status === 'ready' && messages.data.some((m) => m.id === selectedMessageId)
   const openMessageId = messageInList ? selectedMessageId : null
-
   const message = useAsync(
-    account && openMessageId ? `message:${account.id}:${openMessageId}` : null,
-    () => api.mail.getMessage(account!.id, openMessageId!),
+    folder && openMessageId ? `message:${folder.accountId}:${openMessageId}` : null,
+    () => api.mail.getMessage(folder!.accountId, openMessageId!),
   )
 
-  // A failed load must not look like an empty mailbox: show the reason in the
-  // sidebar and in the message list.
-  const loadError =
-    accounts.status === 'error'
-      ? `Accounts could not be loaded: ${accounts.message}`
-      : folders.status === 'error'
-        ? `Folders could not be loaded: ${folders.message}`
-        : undefined
-  const noAccount = accounts.status === 'ready' && accounts.data.length === 0
-  const sidebarNotice =
-    loadError ?? (noAccount ? 'No account set up yet. Adding accounts arrives in M1.' : undefined)
-  const listState: AsyncState<MessageSummary[]> = loadError
-    ? { status: 'error', message: loadError }
-    : messages.status === 'error'
+  const listState: AsyncState<MessageSummary[]> =
+    messages.status === 'error'
       ? { status: 'error', message: `Messages could not be loaded: ${messages.message}` }
       : messages
 
@@ -62,14 +85,15 @@ export function App() {
       <Sidebar
         view={view}
         onViewChange={setView}
-        account={account}
-        folders={folderList}
-        selectedFolderId={folder?.id}
-        onSelectFolder={(id) => {
-          setChosenFolderId(id)
+        accounts={accounts}
+        folders={folders}
+        selection={selection}
+        onSelectFolder={(next) => {
+          setChosen(next)
           setSelectedMessageId(null)
         }}
-        notice={sidebarNotice}
+        onAddAccount={() => setAdding(true)}
+        onRemoveAccount={setRemoving}
         appInfo={appInfo.status === 'ready' ? appInfo.data : undefined}
       />
 
@@ -81,12 +105,59 @@ export function App() {
             selectedId={openMessageId}
             onSelect={setSelectedMessageId}
             today={today}
+            note={account && !showsMessages && folder ? MESSAGES_LATER : undefined}
           />
-          <ReadingPane message={message} />
+          <ReadingPane
+            message={message}
+            empty={
+              account && !showsMessages
+                ? { title: 'No messages yet', hint: 'Reading mail from your server arrives in M2.' }
+                : undefined
+            }
+          />
         </>
       ) : (
         <CalendarPlaceholder now={today} />
       )}
+
+      <AddAccountDialog
+        open={adding}
+        onClose={() => setAdding(false)}
+        onAdded={(added) => {
+          setAdding(false)
+          setChosen({ accountId: added.id, folderId: null })
+          setSelectedMessageId(null)
+          setAccountsVersion((v) => v + 1)
+        }}
+        showLocalPreset={appInfo.status === 'ready' && appInfo.data.isDevelopment}
+      />
+      <RemoveAccountDialog
+        account={removing}
+        onClose={() => setRemoving(null)}
+        onRemoved={(removed) => {
+          setRemoving(null)
+          if (chosen?.accountId === removed.id) setChosen(null)
+          setSelectedMessageId(null)
+          setAccountsVersion((v) => v + 1)
+        }}
+      />
     </div>
   )
+}
+
+function resolveSelection(
+  chosen: FolderSelection | { accountId: string; folderId: null } | null,
+  accounts: Account[] | null,
+  folders: AsyncState<AccountFolders[]>,
+): FolderSelection | undefined {
+  if (!accounts || folders.status !== 'ready') return undefined
+  const accountId =
+    chosen && accounts.some((a) => a.id === chosen.accountId) ? chosen.accountId : accounts[0]?.id
+  const result = folders.data.find((f) => f.accountId === accountId)
+  if (!accountId || result?.status !== 'ready') return undefined
+  const folder =
+    result.folders.find((f) => f.id === chosen?.folderId) ??
+    result.folders.find((f) => f.role === 'inbox') ??
+    result.folders[0]
+  return folder ? { accountId, folderId: folder.id } : undefined
 }

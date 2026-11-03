@@ -10,8 +10,11 @@ services:
     ports:
       - '127.0.0.1:1993:993' # IMAP over TLS
       - '127.0.0.1:1465:465' # SMTP submission over TLS
-      - '127.0.0.1:8443:443' # HTTPS: web admin, CalDAV, JMAP
-      - '127.0.0.1:18080:8080' # HTTP: first-run setup wizard and recovery
+      # HTTPS: web admin and CalDAV. Must stay on 443: the admin sign-in only
+      # works at https://localhost/admin, not on another port.
+      - '127.0.0.1:443:443'
+      # HTTP: first-run setup wizard. Kept on 8080 for the same reason.
+      - '127.0.0.1:8080:8080'
     volumes:
       - stalwart-etc:/etc/stalwart
       - stalwart-data:/var/lib/stalwart

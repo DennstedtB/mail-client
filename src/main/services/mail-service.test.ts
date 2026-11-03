@@ -8,7 +8,7 @@ class TaggedProvider implements MailProvider {
   readonly account: Account
 
   constructor(id: string) {
-    this.account = { id, name: id, email: `${id}@example.org`, kind: 'mock' }
+    this.account = { id, name: id, senderName: id, email: `${id}@example.org`, kind: 'mock' }
   }
 
   async listFolders(): Promise<Folder[]> {
@@ -50,11 +50,14 @@ class TaggedProvider implements MailProvider {
 }
 
 describe('MailService', () => {
-  const service = new MailService([new TaggedProvider('work'), new TaggedProvider('private')])
-
-  it('lists one account per provider, in order', async () => {
-    const accounts = await service.listAccounts()
-    expect(accounts.map((a) => a.id)).toEqual(['work', 'private'])
+  const providers = [new TaggedProvider('work'), new TaggedProvider('private')]
+  const service = new MailService({
+    mailProviders: async () => providers,
+    provider: async (id) => {
+      const provider = providers.find((p) => p.account.id === id)
+      if (!provider) throw new Error(`Unknown account: ${id}`)
+      return provider
+    },
   })
 
   it('routes listFolders to the provider of the requested account', async () => {

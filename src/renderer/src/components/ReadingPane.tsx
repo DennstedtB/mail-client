@@ -8,7 +8,24 @@ import { ToolbarButton } from './ToolbarButton'
 const COMPOSE_LATER = 'coming in M3'
 const ACTIONS_LATER = 'coming in M4'
 
-export function ReadingPane({ message }: { message: AsyncState<Message | null> }) {
+interface EmptyText {
+  title: string
+  hint: string
+}
+
+const NO_SELECTION: EmptyText = {
+  title: 'No message selected',
+  hint: 'Choose a message from the list to read it here.',
+}
+
+export function ReadingPane({
+  message,
+  empty = NO_SELECTION,
+}: {
+  message: AsyncState<Message | null>
+  /** What to say while nothing is shown. */
+  empty?: EmptyText
+}) {
   return (
     <section aria-label="Reading pane" className="flex min-w-0 flex-1 flex-col bg-paper">
       <div className="drag-region flex h-[52px] shrink-0 items-center gap-0.5 border-b border-line px-4">
@@ -22,13 +39,13 @@ export function ReadingPane({ message }: { message: AsyncState<Message | null> }
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {message.status === 'idle' && <EmptyState />}
+        {message.status === 'idle' && <EmptyState {...empty} />}
         {message.status === 'loading' && <p className="p-12 text-ink-muted">Loading message…</p>}
         {message.status === 'error' && (
           <p className="p-12 text-ink-muted">The message could not be loaded: {message.message}</p>
         )}
         {message.status === 'ready' &&
-          (message.data ? <MessageView message={message.data} /> : <EmptyState />)}
+          (message.data ? <MessageView message={message.data} /> : <EmptyState {...empty} />)}
       </div>
     </section>
   )
@@ -93,13 +110,13 @@ function MessageView({ message }: { message: Message }) {
   )
 }
 
-function EmptyState() {
+function EmptyState({ title, hint }: EmptyText) {
   return (
     <div className="grid h-full place-items-center p-12">
       <div className="text-center text-ink-muted">
         <Mail className="mx-auto mb-3 size-8 text-ink-faint" strokeWidth={1.25} aria-hidden />
-        <p className="text-[14px] font-medium text-ink">No message selected</p>
-        <p className="mt-1 text-[12.5px]">Choose a message from the list to read it here.</p>
+        <p className="text-[14px] font-medium text-ink">{title}</p>
+        <p className="mt-1 text-[12.5px]">{hint}</p>
       </div>
     </div>
   )

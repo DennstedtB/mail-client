@@ -2,7 +2,7 @@
 
 A desktop mail and calendar client for macOS, in the spirit of Outlook and Thunderbird. Built with Electron, React and TypeScript.
 
-**Status:** milestone M0. The app runs with sample data; real accounts arrive in M1.
+**Status:** milestone M1. You can add IMAP/SMTP accounts and see their folders; reading messages arrives in M2. Until you add an account, the app shows a sample mailbox.
 
 ## Requirements
 
@@ -20,6 +20,8 @@ npm run dev
 ```
 
 The first start downloads Electron for your Mac (about 100 MB, once). The app opens with a sample mailbox. Use the arrow keys to move through the message list.
+
+To add your own account, click **Add account** in the sidebar. MailClient checks the IMAP and SMTP servers before saving, and stores the password encrypted with a key from the macOS Keychain. The first time, macOS may ask whether MailClient may use the Keychain; allow it. To try it without a real mailbox, set up the [local test mail server](docs/dev-mail-server.md).
 
 ## Install the app on your Mac
 
