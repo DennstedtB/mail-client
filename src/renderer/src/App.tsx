@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import type { FolderId, MessageId } from '@shared/types/mail'
+import type { FolderId, MessageId, MessageSummary } from '@shared/types/mail'
 import { CalendarPlaceholder } from './components/CalendarPlaceholder'
 import { MessageList } from './components/MessageList'
 import { ReadingPane } from './components/ReadingPane'
 import { Sidebar, type View } from './components/Sidebar'
-import { useAsync } from './lib/use-async'
+import { useAsync, type AsyncState } from './lib/use-async'
+import { useToday } from './lib/use-today'
 
 const api = window.api
 
@@ -12,6 +13,7 @@ export function App() {
   const [view, setView] = useState<View>('mail')
   const [chosenFolderId, setChosenFolderId] = useState<FolderId | null>(null)
   const [selectedMessageId, setSelectedMessageId] = useState<MessageId | null>(null)
+  const today = useToday()
 
   const appInfo = useAsync('app-info', () => api.app.getInfo())
   const accounts = useAsync('accounts', () => api.mail.listAccounts())
@@ -38,6 +40,23 @@ export function App() {
     () => api.mail.getMessage(account!.id, openMessageId!),
   )
 
+  // A failed load must not look like an empty mailbox: show the reason in the
+  // sidebar and in the message list.
+  const loadError =
+    accounts.status === 'error'
+      ? `Accounts could not be loaded: ${accounts.message}`
+      : folders.status === 'error'
+        ? `Folders could not be loaded: ${folders.message}`
+        : undefined
+  const noAccount = accounts.status === 'ready' && accounts.data.length === 0
+  const sidebarNotice =
+    loadError ?? (noAccount ? 'No account set up yet. Adding accounts arrives in M1.' : undefined)
+  const listState: AsyncState<MessageSummary[]> = loadError
+    ? { status: 'error', message: loadError }
+    : messages.status === 'error'
+      ? { status: 'error', message: `Messages could not be loaded: ${messages.message}` }
+      : messages
+
   return (
     <div className="flex h-full">
       <Sidebar
@@ -50,6 +69,7 @@ export function App() {
           setChosenFolderId(id)
           setSelectedMessageId(null)
         }}
+        notice={sidebarNotice}
         appInfo={appInfo.status === 'ready' ? appInfo.data : undefined}
       />
 
@@ -57,14 +77,15 @@ export function App() {
         <>
           <MessageList
             folder={folder}
-            messages={messages}
+            messages={listState}
             selectedId={openMessageId}
             onSelect={setSelectedMessageId}
+            today={today}
           />
           <ReadingPane message={message} />
         </>
       ) : (
-        <CalendarPlaceholder />
+        <CalendarPlaceholder now={today} />
       )}
     </div>
   )

@@ -50,11 +50,14 @@ function MessageView({ message }: { message: Message }) {
               <span className="ml-1.5 text-ink-muted">{message.from.email}</span>
             )}
           </p>
-          <p className="truncate text-[12.5px] text-ink-muted">
+          <p className="truncate text-[12.5px] text-ink-muted" title={formatRecipients(message.to)}>
             To: {formatRecipients(message.to)}
           </p>
           {message.cc.length > 0 && (
-            <p className="truncate text-[12.5px] text-ink-muted">
+            <p
+              className="truncate text-[12.5px] text-ink-muted"
+              title={formatRecipients(message.cc)}
+            >
               Cc: {formatRecipients(message.cc)}
             </p>
           )}

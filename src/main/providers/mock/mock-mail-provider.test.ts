@@ -46,4 +46,9 @@ describe('makePreview', () => {
     expect(preview.length).toBeLessThanOrEqual(20)
     expect(preview.endsWith('…')).toBe(true)
   })
+
+  it('returns an empty preview for a length limit of zero or less', () => {
+    expect(makePreview('Hello world', 0)).toBe('')
+    expect(makePreview('Hello world', -5)).toBe('')
+  })
 })

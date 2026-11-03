@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  pre_merge_checks:
+    docstrings:
+      # TypeScript types document the code; a coverage target only produces boilerplate comments.
+      mode: 'off'
+  tools:
+    # The project doesn't use Biome, and Biome doesn't understand Tailwind's CSS syntax.
+    biome:
+      enabled: false
+    # ESLint already runs in CI with the project's own config.
+    eslint:
+      enabled: false

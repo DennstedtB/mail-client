@@ -1,6 +1,6 @@
 # Local test mail server
 
-During development the app talks to a local [Stalwart](https://github.com/stalwartlabs/stalwart) server instead of a real mailbox. One container provides IMAP, SMTP submission and CalDAV, so a bug in "delete" can never touch real mail.
+From M1 on, the app is developed against a local [Stalwart](https://github.com/stalwartlabs/stalwart) server instead of a real mailbox. In M0 the app shows sample data only and doesn't connect to it yet. One container provides IMAP, SMTP submission and CalDAV, so a bug in "delete" can never touch real mail.
 
 > Written from the Stalwart 1.0 documentation and not yet run on the Mac. If a wizard screen looks different, follow the screen and update this file.
 

@@ -2,22 +2,22 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, nativeTheme, session, shell, type IpcMainInvokeEvent } from 'electron'
 import type { Api } from '@shared/ipc-contract'
+import { createAppUrlCheck } from './app-url'
 import { registerApi } from './ipc'
 import { MockMailProvider } from './providers/mock/mock-mail-provider'
 import { MailService } from './services/mail-service'
 
 const MILESTONE = 'M0'
 const RENDERER_INDEX = join(__dirname, '../renderer/index.html')
-const RENDERER_INDEX_URL = pathToFileURL(RENDERER_INDEX).href
 const DEV_SERVER_URL = app.isPackaged ? undefined : process.env['ELECTRON_RENDERER_URL']
 
 app.setName('MailClient')
 
 /** True for the app's own UI, in development and in the built app. */
-function isAppUrl(url: string): boolean {
-  if (DEV_SERVER_URL && url.startsWith(DEV_SERVER_URL)) return true
-  return url.startsWith(RENDERER_INDEX_URL)
-}
+const isAppUrl = createAppUrlCheck({
+  rendererIndexUrl: pathToFileURL(RENDERER_INDEX).href,
+  devServerUrl: DEV_SERVER_URL,
+})
 
 function isTrustedSender(event: IpcMainInvokeEvent): boolean {
   return isAppUrl(event.senderFrame?.url ?? '')

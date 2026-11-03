@@ -10,11 +10,13 @@ interface MessageListProps {
   messages: AsyncState<MessageSummary[]>
   selectedId: MessageId | null
   onSelect: (id: MessageId) => void
+  /** Reference date for relative dates ("Yesterday"); changes at midnight. */
+  today: Date
 }
 
 const optionId = (id: MessageId) => `message-${id}`
 
-export function MessageList({ folder, messages, selectedId, onSelect }: MessageListProps) {
+export function MessageList({ folder, messages, selectedId, onSelect, today }: MessageListProps) {
   const listRef = useRef<HTMLUListElement>(null)
   const items = messages.status === 'ready' ? messages.data : []
 
@@ -65,9 +67,7 @@ export function MessageList({ folder, messages, selectedId, onSelect }: MessageL
       </div>
 
       {messages.status === 'loading' && <ListNote>Loading messages…</ListNote>}
-      {messages.status === 'error' && (
-        <ListNote>Messages could not be loaded: {messages.message}</ListNote>
-      )}
+      {messages.status === 'error' && <ListNote>{messages.message}</ListNote>}
       {messages.status === 'ready' && items.length === 0 && (
         <ListNote>No messages in {folder?.name ?? 'this folder'}.</ListNote>
       )}
@@ -87,6 +87,7 @@ export function MessageList({ folder, messages, selectedId, onSelect }: MessageL
               key={message.id}
               message={message}
               selected={message.id === selectedId}
+              today={today}
               onSelect={() => {
                 onSelect(message.id)
                 listRef.current?.focus()
@@ -102,10 +103,12 @@ export function MessageList({ folder, messages, selectedId, onSelect }: MessageL
 function MessageRow({
   message,
   selected,
+  today,
   onSelect,
 }: {
   message: MessageSummary
   selected: boolean
+  today: Date
   onSelect: () => void
 }) {
   const unread = !message.isRead
@@ -165,7 +168,7 @@ function MessageRow({
             selected && 'group-focus:text-selection-ink/80',
           )}
         >
-          {formatListDate(message.date)}
+          {formatListDate(message.date, today)}
         </time>
       </div>
       <p className={cn('truncate text-[13px]', unread && 'font-medium')}>

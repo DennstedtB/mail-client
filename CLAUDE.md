@@ -39,7 +39,7 @@ Data flow: UI → `window.api.mail.listMessages()` → preload → `ipcRenderer.
 ### Security baseline (do not weaken)
 
 - `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false` for every window.
-- IPC handlers reject calls from frames that are not the app's own UI (`isTrustedSender`).
+- IPC handlers reject calls from frames that are not the app's own UI. The check (`src/main/app-url.ts`) compares parsed URLs, never string prefixes, and is covered by tests.
 - Strict CSP in `src/renderer/index.html`. No remote scripts, fonts or styles; bundle what is needed.
 - The window can't navigate away from the app; new windows are denied, and https links open in the default browser.
 - Permission requests (camera, notifications, …) are denied until a feature needs one.
@@ -53,6 +53,10 @@ Data flow: UI → `window.api.mail.listMessages()` → preload → `ipcRenderer.
 - Tests live next to the code as `*.test.ts`. New logic in `src/main` and `src/shared`, and pure helpers in the renderer, gets tests.
 - Dependencies: libraries used by the main process at runtime go in `dependencies` (they are shipped in the app). Everything bundled into the renderer, and all tooling, goes in `devDependencies`.
 - UI copy: English, sentence case, plain verbs. Inactive features stay visible with a tooltip naming the milestone that brings them.
+- Failed loads are shown with their reason; they must never look like an empty list.
+- Relative dates ("Yesterday", today's highlight) use `useToday()`, which updates at midnight.
+- CI: workflows run with read-only permissions, `persist-credentials: false`, and actions pinned to commit SHAs (Dependabot updates them).
+- Code review: CodeRabbit reviews every pull request (config in `.coderabbit.yaml`). Reply to each finding with what changed, or why it was skipped.
 
 ## UI design
 

@@ -33,6 +33,8 @@ interface SidebarProps {
   folders: Folder[]
   selectedFolderId: FolderId | undefined
   onSelectFolder: (folderId: FolderId) => void
+  /** Shown instead of the folder list, e.g. a load error or "no account yet". */
+  notice?: string
   appInfo: AppInfo | undefined
 }
 
@@ -43,6 +45,7 @@ export function Sidebar({
   folders,
   selectedFolderId,
   onSelectFolder,
+  notice,
   appInfo,
 }: SidebarProps) {
   return (
@@ -54,17 +57,17 @@ export function Sidebar({
       <div className="drag-region h-[52px] shrink-0" />
 
       <div
-        role="tablist"
+        role="group"
         aria-label="View"
         className="mx-3 mb-4 grid grid-cols-2 gap-1 rounded-lg bg-ink/5 p-0.5"
       >
-        <ViewTab
+        <ViewToggle
           icon={Mail}
           label="Mail"
           active={view === 'mail'}
           onClick={() => onViewChange('mail')}
         />
-        <ViewTab
+        <ViewToggle
           icon={CalendarDays}
           label="Calendar"
           active={view === 'calendar'}
@@ -72,7 +75,13 @@ export function Sidebar({
         />
       </div>
 
-      {view === 'mail' && account && (
+      {view === 'mail' && notice && (
+        <p role="status" className="px-4 text-[12px] leading-snug text-ink-muted">
+          {notice}
+        </p>
+      )}
+
+      {view === 'mail' && !notice && account && (
         <div className="min-h-0 flex-1 overflow-y-auto px-2">
           <h2
             className="truncate px-2 pb-1 text-[11px] font-semibold text-ink-faint"
@@ -129,7 +138,8 @@ export function Sidebar({
   )
 }
 
-function ViewTab({
+/** One half of the Mail / Calendar switch: a toggle button, pressed while its view is shown. */
+function ViewToggle({
   icon: Icon,
   label,
   active,
@@ -143,8 +153,7 @@ function ViewTab({
   return (
     <button
       type="button"
-      role="tab"
-      aria-selected={active}
+      aria-pressed={active}
       onClick={onClick}
       className={cn(
         'flex h-7 items-center justify-center gap-1.5 rounded-md text-[12px] font-medium',

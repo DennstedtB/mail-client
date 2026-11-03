@@ -15,6 +15,7 @@ const PREVIEW_LENGTH = 160
 
 /** Turns a message body into a one-line preview for the message list. */
 export function makePreview(bodyText: string, maxLength = PREVIEW_LENGTH): string {
+  if (maxLength <= 0) return ''
   const singleLine = bodyText.replace(/\s+/g, ' ').trim()
   if (singleLine.length <= maxLength) return singleLine
   return `${singleLine.slice(0, maxLength - 1).trimEnd()}…`
