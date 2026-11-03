@@ -7,11 +7,11 @@ Read this file before changing anything. Keep it current when architecture, conv
 ## Commands
 
 ```sh
-npm run dev           # start the app with hot reload
+npm run dev           # start the app with hot reload (downloads Electron on first run)
 npm run check         # typecheck + lint + format check + tests (must pass before every commit)
 npm test              # unit tests (Vitest)
 npm run build         # typecheck and build to out/
-npm run package:mac   # unsigned .app in dist/ (macOS only)
+npm run package:mac   # ad-hoc signed .app in dist/ (macOS only)
 npm run mailserver:up # local Stalwart test server, see docs/dev-mail-server.md
 ```
 
