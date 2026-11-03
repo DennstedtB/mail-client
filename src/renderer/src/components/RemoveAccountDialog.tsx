@@ -13,14 +13,27 @@ interface RemoveAccountDialogProps {
 
 export function RemoveAccountDialog({ account, onClose, onRemoved }: RemoveAccountDialogProps) {
   const titleId = useId()
+  // Lives here, not in the body, so the dialog can't be closed while the removal runs.
+  const [busy, setBusy] = useState(false)
   return (
-    <Modal open={account !== null} onClose={onClose} labelledBy={titleId} className="w-[26rem]">
+    <Modal
+      open={account !== null}
+      onClose={onClose}
+      preventClose={busy}
+      labelledBy={titleId}
+      className="w-[26rem]"
+    >
       {account && (
         <RemoveAccountBody
           account={account}
           titleId={titleId}
+          busy={busy}
+          setBusy={setBusy}
           onClose={onClose}
-          onRemoved={onRemoved}
+          onRemoved={(removed) => {
+            setBusy(false)
+            onRemoved(removed)
+          }}
         />
       )}
     </Modal>
@@ -30,15 +43,18 @@ export function RemoveAccountDialog({ account, onClose, onRemoved }: RemoveAccou
 function RemoveAccountBody({
   account,
   titleId,
+  busy,
+  setBusy,
   onClose,
   onRemoved,
 }: {
   account: Account
   titleId: string
+  busy: boolean
+  setBusy: (busy: boolean) => void
   onClose: () => void
   onRemoved: (account: Account) => void
 }) {
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   async function remove() {
@@ -74,8 +90,9 @@ function RemoveAccountBody({
         <button
           type="button"
           onClick={onClose}
+          disabled={busy}
           autoFocus
-          className="h-8 rounded-md px-3 text-[13px] font-medium hover:bg-ink/6"
+          className="h-8 rounded-md px-3 text-[13px] font-medium hover:bg-ink/6 disabled:opacity-50"
         >
           Cancel
         </button>
@@ -83,7 +100,7 @@ function RemoveAccountBody({
           type="button"
           onClick={() => void remove()}
           aria-disabled={busy || undefined}
-          className="h-8 rounded-md bg-danger px-3.5 text-[13px] font-semibold text-white hover:brightness-110"
+          className="h-8 rounded-md bg-danger px-3.5 text-[13px] font-semibold text-danger-contrast hover:brightness-110"
         >
           {busy ? 'Removing…' : 'Remove account'}
         </button>

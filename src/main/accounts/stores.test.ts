@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AccountStore, parseAccountsFile, type StoredAccount } from './account-store'
-import { EncryptedSecretStore, KEYCHAIN_UNAVAILABLE, type Cipher } from './secret-store'
+import {
+  EncryptedSecretStore,
+  KEYCHAIN_UNAVAILABLE,
+  parseSecretsFile,
+  type Cipher,
+} from './secret-store'
 
 let dir: string
 beforeEach(async () => {
@@ -64,7 +69,21 @@ describe('AccountStore', () => {
   })
 })
 
+describe('parseSecretsFile', () => {
+  it('rejects arrays and values that are not strings', () => {
+    expect(() => parseSecretsFile({ version: 1, secrets: ['x'] })).toThrow('unknown format')
+    expect(() => parseSecretsFile({ version: 1, secrets: { a1: 42 } })).toThrow('unknown format')
+    expect(parseSecretsFile({ version: 1, secrets: { a1: 'abc' } }).secrets).toEqual({ a1: 'abc' })
+  })
+})
+
 describe('parseAccountsFile', () => {
+  it('rejects ports outside 1–65535', () => {
+    const imap = { ...account.settings.imap, port: 70000 }
+    const badPort = { ...account, settings: { ...account.settings, imap } }
+    expect(() => parseAccountsFile({ version: 1, accounts: [badPort] })).toThrow('Entry 1')
+  })
+
   it('rejects unknown versions and damaged entries', () => {
     expect(() => parseAccountsFile({ version: 2, accounts: [] })).toThrow('unknown format')
     expect(() =>
@@ -107,8 +126,26 @@ describe('EncryptedSecretStore', () => {
   it('stores a secret again when the keychain asks for re-encryption', async () => {
     const path = join(dir, 'credentials.json')
     await new EncryptedSecretStore(path, fakeCipher()).set('a1', 'pw')
-    const rotating = fakeCipher(true, true)
+    const before = JSON.parse(await readFile(path, 'utf8')).secrets.a1
+
+    // A rotated key: encrypts differently, and asks for re-encryption on decrypt.
+    const rotating: Cipher = {
+      isAvailable: async () => true,
+      encrypt: async (text) => Buffer.from(`v2:${text}`),
+      decrypt: async () => ({ plainText: 'pw', reEncrypt: true }),
+    }
     await expect(new EncryptedSecretStore(path, rotating).get('a1')).resolves.toBe('pw')
-    expect(rotating.encrypted).toBe(1)
+    const after = JSON.parse(await readFile(path, 'utf8')).secrets.a1
+    expect(after).not.toBe(before)
+    expect(Buffer.from(after, 'base64').toString()).toBe('v2:pw')
+  })
+
+  it('keeps only the secrets of known accounts', async () => {
+    const store = new EncryptedSecretStore(join(dir, 'credentials.json'), fakeCipher())
+    await store.set('a1', 'one')
+    await store.set('orphan', 'two')
+    await expect(store.retainOnly(['a1'])).resolves.toEqual(['orphan'])
+    await expect(store.get('a1')).resolves.toBe('one')
+    await expect(store.get('orphan')).rejects.toThrow('No password')
   })
 })

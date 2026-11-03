@@ -26,6 +26,8 @@ function isServer(value: unknown): value is ServerSettings {
     isRecord(value) &&
     typeof value['host'] === 'string' &&
     Number.isInteger(value['port']) &&
+    (value['port'] as number) >= 1 &&
+    (value['port'] as number) <= 65535 &&
     SECURITY.includes(value['security'] as ConnectionSecurity)
   )
 }

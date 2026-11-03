@@ -70,11 +70,15 @@ function AddAccountForm({
   const [showErrors, setShowErrors] = useState(false)
   const [status, setStatus] = useState<Status>({ kind: 'editing' })
 
-  const input = toAccountInput(form)
+  const localServer = isLoopbackHost(form.imapHost) || isLoopbackHost(form.smtpHost)
+  // The certificate option is hidden for remote servers, so it must not count there either.
+  const input = toAccountInput({
+    ...form,
+    acceptSelfSignedLocalCertificate: form.acceptSelfSignedLocalCertificate && localServer,
+  })
   const errors = validateNewAccount(input)
   const visibleErrors = showErrors ? errors : {}
   const hosts = suggestedHosts(form.email)
-  const localServer = isLoopbackHost(form.imapHost) || isLoopbackHost(form.smtpHost)
   const checking = status.kind === 'checking'
 
   function update(patch: Partial<AccountForm>) {
@@ -143,7 +147,7 @@ function AddAccountForm({
       </header>
 
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 pb-5">
-        <fieldset className="grid grid-cols-2 gap-x-3 gap-y-3">
+        <fieldset disabled={checking} className="grid grid-cols-2 gap-x-3 gap-y-3">
           <legend className="sr-only">Account</legend>
           <TextField
             label="Account name"
@@ -181,7 +185,7 @@ function AddAccountForm({
           />
         </fieldset>
 
-        <fieldset className="space-y-3">
+        <fieldset disabled={checking} className="space-y-3">
           <legend className="mb-2 text-[12px] font-semibold text-ink-muted">Servers</legend>
           <ServerRow
             label="Incoming mail (IMAP)"
@@ -272,7 +276,7 @@ function fieldId(base: string, name: AccountField) {
 }
 
 const INPUT =
-  'h-8 w-full rounded-md border bg-surface px-2.5 text-[13px] text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/25'
+  'h-8 w-full rounded-md border bg-surface px-2.5 text-[13px] text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/25 disabled:opacity-60'
 
 function TextField({
   id,

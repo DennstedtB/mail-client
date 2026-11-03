@@ -20,13 +20,20 @@ interface SecretsFile {
   secrets: Record<string, string>
 }
 
-function parseSecretsFile(value: unknown): SecretsFile {
+export function parseSecretsFile(value: unknown): SecretsFile {
   if (value === undefined) return { version: 1, secrets: {} }
   const file = value as Partial<SecretsFile>
-  if (file.version !== 1 || typeof file.secrets !== 'object' || file.secrets === null) {
+  const secrets = file.secrets as unknown
+  if (
+    file.version !== 1 ||
+    typeof secrets !== 'object' ||
+    secrets === null ||
+    Array.isArray(secrets) ||
+    Object.values(secrets).some((v) => typeof v !== 'string')
+  ) {
     throw new Error('The password store has an unknown format.')
   }
-  return { version: 1, secrets: { ...file.secrets } }
+  return { version: 1, secrets: { ...(secrets as Record<string, string>) } }
 }
 
 /**
@@ -76,6 +83,19 @@ export class EncryptedSecretStore {
       if (!(accountId in file.secrets)) return
       delete file.secrets[accountId]
       await writeJsonFile(this.path, file)
+    })
+  }
+
+  /** Deletes every stored secret except those of the given accounts. Returns the deleted ids. */
+  retainOnly(accountIds: string[]): Promise<string[]> {
+    return this.queue(async () => {
+      const file = parseSecretsFile(await readJsonFile(this.path))
+      const keep = new Set(accountIds)
+      const orphans = Object.keys(file.secrets).filter((id) => !keep.has(id))
+      if (orphans.length === 0) return []
+      for (const id of orphans) delete file.secrets[id]
+      await writeJsonFile(this.path, file)
+      return orphans
     })
   }
 

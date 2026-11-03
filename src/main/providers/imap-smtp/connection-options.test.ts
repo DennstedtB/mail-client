@@ -72,3 +72,21 @@ describe('smtpOptions', () => {
     expect(smtpOptions(local, 'pw').tls?.rejectUnauthorized).toBe(false)
   })
 })
+
+describe('IPv6 loopback', () => {
+  const ipv6: ImapSmtpSettings = {
+    ...local,
+    imap: { host: '[::1]', port: 1993, security: 'tls' },
+    smtp: { host: '::1', port: 1465, security: 'tls' },
+  }
+
+  it('passes the address without brackets to the socket', () => {
+    expect(imapOptions(ipv6, 'pw').host).toBe('::1')
+    expect(smtpOptions(ipv6, 'pw').host).toBe('::1')
+  })
+
+  it('treats it as a local server', () => {
+    expect(imapOptions(ipv6, 'pw').tls?.rejectUnauthorized).toBe(false)
+    expect(imapOptions(ipv6, 'pw').tls?.servername).toBeUndefined()
+  })
+})

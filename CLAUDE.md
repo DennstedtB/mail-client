@@ -13,7 +13,7 @@ npm test              # unit tests (Vitest)
 npm run build         # typecheck and build to out/
 npm run package:mac   # ad-hoc signed .app in dist/ (macOS only)
 npm run mailserver:up # local Stalwart test server, see docs/dev-mail-server.md
-npm run mailserver:send-test -- --password <pw>  # send a test message bob → alice
+npm run mailserver:send-test -- --password 'BOB_PASSWORD'  # test message bob → alice
 ```
 
 ## Architecture
@@ -57,7 +57,7 @@ Data lives in `app.getPath('userData')`, on macOS `~/Library/Application Support
 - Strict CSP in `src/renderer/index.html`. No remote scripts, fonts or styles; bundle what is needed.
 - The window can't navigate away from the app; new windows are denied, and https links open in the default browser.
 - Permission requests (camera, notifications, …) are denied until a feature needs one.
-- Passwords only via `EncryptedSecretStore` (Electron `safeStorage`, async API; key in the macOS Keychain). They exist in plain text only in main-process memory: never in files, logs, IPC responses or the renderer. On Linux, the weak `basic_text` backend counts as unavailable.
+- Passwords only via `EncryptedSecretStore` (Electron `safeStorage`, async API; key in the macOS Keychain). In plain text a password exists only in the "Add account" form while the user types it, in the one `accounts.add` request that sends it to the main process, and in main-process memory. Never in files, logs or IPC responses, and the renderer never gets it back. On Linux, the weak `basic_text` backend counts as unavailable.
 - No unencrypted connections: TLS or required STARTTLS only. Certificates are always verified, except a self-signed one for a loopback host when the account allows it (`isLoopbackHost`), and that rule is enforced in the main process, not just the form.
 - ImapFlow and Nodemailer run with `logger: false`; nothing about accounts goes to the console.
 - From M2: HTML mail only in a sandboxed iframe, sanitized with DOMPurify, remote content blocked by default.
@@ -79,7 +79,7 @@ Data lives in `app.getPath('userData')`, on macOS `~/Library/Application Support
 
 Quiet native chrome in the system font; the message is the focus, set in Source Serif 4 (bundled, `font-serif`). One accent color, petrol, used for unread markers, selection and focus.
 
-Tokens are CSS variables in `src/renderer/src/index.css` (light and dark) and mapped to Tailwind colors: `paper`, `surface`, `sidebar`, `ink`, `ink-muted`, `ink-faint`, `line`, `accent`, `accent-soft`, `selection`, `selection-ink`, `danger` (errors and destructive actions). Use these instead of raw colors. Toolbars are 52px high and act as window drag regions (`drag-region`; interactive children need `no-drag`). Dialogs use the native `<dialog>` via `components/Modal.tsx`.
+Tokens are CSS variables in `src/renderer/src/index.css` (light and dark) and mapped to Tailwind colors: `paper`, `surface`, `sidebar`, `ink`, `ink-muted`, `ink-faint`, `line`, `accent`, `accent-soft`, `selection`, `selection-ink`, `danger` and `danger-contrast` (errors and destructive actions). Use these instead of raw colors. Toolbars are 52px high and act as window drag regions (`drag-region`; interactive children need `no-drag`). Dialogs use the native `<dialog>` via `components/Modal.tsx`.
 
 ## Libraries
 

@@ -67,17 +67,17 @@ User name: the full address, `alice@mailclient.test`. "Trust the self-signed cer
 Send a message from bob to alice, so alice's inbox has something unread:
 
 ```sh
-npm run mailserver:send-test -- --password <bob's password>
+npm run mailserver:send-test -- --password 'BOB_PASSWORD'
 ```
 
-Options: `--from`, `--to`, `--subject`. The script only talks to `127.0.0.1`.
+Replace `BOB_PASSWORD` with bob's password; the single quotes keep the shell from interpreting special characters. Options: `--from`, `--to`, `--subject`. The script only talks to `127.0.0.1`.
 
 ## Live tests
 
 Some tests run against this server, and are skipped unless you pass alice's password:
 
 ```sh
-MAILCLIENT_LIVE_PASSWORD=<alice's password> npx vitest run live-server
+MAILCLIENT_LIVE_PASSWORD='ALICE_PASSWORD' npx vitest run live-server
 ```
 
 ## Everyday commands

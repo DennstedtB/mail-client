@@ -26,10 +26,15 @@ function input(overrides: Partial<NewAccountInput> = {}): NewAccountInput {
 }
 
 function setup(
-  options: { check?: { imap: CheckResult; smtp: CheckResult }; keychain?: boolean } = {},
+  options: {
+    check?: { imap: CheckResult; smtp: CheckResult }
+    keychain?: boolean
+    accounts?: StoredAccount[]
+    secrets?: Record<string, string>
+  } = {},
 ) {
-  let saved: StoredAccount[] = []
-  const secrets = new Map<string, string>()
+  let saved: StoredAccount[] = options.accounts ?? []
+  const secrets = new Map<string, string>(Object.entries(options.secrets ?? {}))
   let nextId = 1
   const deps = {
     store: {
@@ -43,6 +48,11 @@ function setup(
       get: vi.fn(async (id: string) => secrets.get(id) ?? Promise.reject(new Error('none'))),
       set: vi.fn(async (id: string, secret: string) => void secrets.set(id, secret)),
       delete: vi.fn(async (id: string) => void secrets.delete(id)),
+      retainOnly: vi.fn(async (ids: string[]) => {
+        const orphans = [...secrets.keys()].filter((id) => !ids.includes(id))
+        orphans.forEach((id) => secrets.delete(id))
+        return orphans
+      }),
     },
     checker: { check: vi.fn(async () => options.check ?? { imap: OK, smtp: OK }) },
     createProvider: vi.fn(
@@ -149,5 +159,43 @@ describe('AccountService', () => {
     const provider = await service.provider('id-1')
     await expect(provider.listFolders()).resolves.toMatchObject([{ id: 'secret' }])
     expect(await service.provider('id-1')).toBe(provider)
+  })
+
+  it('runs overlapping adds one after the other, so both accounts are kept', async () => {
+    const { service, saved } = setup()
+    await Promise.all([
+      service.add(input({ email: 'one@example.com' })),
+      service.add(input({ email: 'two@example.com' })),
+    ])
+    expect(
+      saved()
+        .map((a) => a.email)
+        .sort(),
+    ).toEqual(['one@example.com', 'two@example.com'])
+  })
+
+  it('adds the same address only once, even when both adds overlap', async () => {
+    const { service, saved } = setup()
+    const results = await Promise.allSettled([service.add(input()), service.add(input())])
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected'])
+    expect(saved()).toHaveLength(1)
+  })
+
+  it('deletes passwords of accounts that no longer exist when it starts', async () => {
+    const existing: StoredAccount = {
+      id: 'kept',
+      kind: 'imap',
+      name: 'Kept',
+      senderName: 'Kept',
+      email: 'kept@example.com',
+      createdAt: '2026-11-03T10:00:00Z',
+      settings: input().settings,
+    }
+    const { service, secrets } = setup({
+      accounts: [existing],
+      secrets: { kept: 'pw', orphan: 'left over from a failed removal' },
+    })
+    await service.list()
+    await vi.waitFor(() => expect([...secrets.keys()]).toEqual(['kept']))
   })
 })

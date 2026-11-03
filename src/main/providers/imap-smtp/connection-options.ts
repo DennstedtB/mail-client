@@ -16,8 +16,14 @@ export function tlsOptions(server: ServerSettings, settings: ImapSmtpSettings) {
   return {
     minVersion: 'TLSv1.2' as const,
     rejectUnauthorized: !trustSelfSigned,
-    servername: isIpAddress(server.host) ? undefined : server.host,
+    servername: isIpAddress(socketHost(server.host)) ? undefined : socketHost(server.host),
   }
+}
+
+/** The host as the socket needs it: trimmed, and IPv6 without the brackets used in URLs. */
+export function socketHost(host: string): string {
+  const trimmed = host.trim()
+  return /^\[.*\]$/.test(trimmed) ? trimmed.slice(1, -1) : trimmed
 }
 
 function isIpAddress(host: string): boolean {
@@ -27,7 +33,7 @@ function isIpAddress(host: string): boolean {
 export function imapOptions(settings: ImapSmtpSettings, password: string): ImapFlowOptions {
   const { imap } = settings
   return {
-    host: imap.host.trim(),
+    host: socketHost(imap.host),
     port: imap.port,
     secure: imap.security === 'tls',
     // STARTTLS is required, never optional: credentials must not be sent in clear text.
@@ -46,7 +52,7 @@ export function imapOptions(settings: ImapSmtpSettings, password: string): ImapF
 export function smtpOptions(settings: ImapSmtpSettings, password: string): SMTPTransport.Options {
   const { smtp } = settings
   return {
-    host: smtp.host.trim(),
+    host: socketHost(smtp.host),
     port: smtp.port,
     secure: smtp.security === 'tls',
     requireTLS: smtp.security === 'starttls',

@@ -151,8 +151,14 @@ function resolveSelection(
   folders: AsyncState<AccountFolders[]>,
 ): FolderSelection | undefined {
   if (!accounts || folders.status !== 'ready') return undefined
+  const loaded = (id: string) =>
+    folders.data.some((f) => f.accountId === id && f.status === 'ready')
+  // The chosen account if it still exists, otherwise the first one whose folders loaded,
+  // so one unreachable account doesn't leave the window without a selection.
   const accountId =
-    chosen && accounts.some((a) => a.id === chosen.accountId) ? chosen.accountId : accounts[0]?.id
+    chosen && accounts.some((a) => a.id === chosen.accountId)
+      ? chosen.accountId
+      : accounts.find((a) => loaded(a.id))?.id
   const result = folders.data.find((f) => f.accountId === accountId)
   if (!accountId || result?.status !== 'ready') return undefined
   const folder =
