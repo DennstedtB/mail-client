@@ -23,6 +23,8 @@ export interface AccountServiceDeps {
   sampleProvider: MailProvider
   newId(): string
   now(): Date
+  /** Told after an account was added or removed, e.g. to start watching it or drop its cache. */
+  onChange?(change: { type: 'added' | 'removed'; accountId: AccountId }): void
 }
 
 export function toAccount({ id, name, senderName, email, kind }: StoredAccount): Account {
@@ -83,6 +85,7 @@ export class AccountService implements AccountsApi, MailProviderSource {
         throw error
       }
       this.accounts = Promise.resolve([...accounts, stored])
+      this.deps.onChange?.({ type: 'added', accountId: stored.id })
       return { status: 'added' as const, account: toAccount(stored) }
     })
   }
@@ -98,7 +101,14 @@ export class AccountService implements AccountsApi, MailProviderSource {
       // cleanup on the next start removes it (see load).
       await this.deps.store.save(remaining)
       this.accounts = Promise.resolve(remaining)
+      const provider = this.providers.get(accountId)
       this.providers.delete(accountId)
+      try {
+        this.deps.onChange?.({ type: 'removed', accountId })
+      } catch {
+        // Cache cleanup must not stop the password deletion below.
+      }
+      await provider?.close().catch(() => undefined)
       await this.deps.secrets.delete(accountId)
     })
   }

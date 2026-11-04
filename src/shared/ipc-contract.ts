@@ -16,6 +16,7 @@ import type {
   AccountId,
   Folder,
   FolderId,
+  MailChange,
   Message,
   MessageId,
   MessageSummary,
@@ -45,10 +46,18 @@ export interface AccountsApi {
 }
 
 export interface MailApi {
+  /** Folders with unread and total counts, straight from the server. */
   listFolders(accountId: AccountId): Promise<Folder[]>
-  /** Newest first. */
+  /** Messages from the local cache, newest first. Returns at once; see syncFolder. */
   listMessages(accountId: AccountId, folderId: FolderId): Promise<MessageSummary[]>
+  /** Brings the cache for a folder up to date with the server, then emits a MailChange. */
+  syncFolder(accountId: AccountId, folderId: FolderId): Promise<void>
+  /** The full message; downloaded and cached on first use. */
   getMessage(accountId: AccountId, messageId: MessageId): Promise<Message | null>
+  /** Opens an attachment with the default app. Refuses file types that can run code. */
+  openAttachment(accountId: AccountId, messageId: MessageId, attachmentId: string): Promise<void>
+  /** Asks where to save an attachment. False if the user cancelled. */
+  saveAttachment(accountId: AccountId, messageId: MessageId, attachmentId: string): Promise<boolean>
 }
 
 export interface Api {
@@ -62,8 +71,33 @@ export type Namespace = keyof Api
 export const API_METHODS = {
   app: ['getInfo'],
   accounts: ['list', 'add', 'remove'],
-  mail: ['listFolders', 'listMessages', 'getMessage'],
+  mail: [
+    'listFolders',
+    'listMessages',
+    'syncFolder',
+    'getMessage',
+    'openAttachment',
+    'saveAttachment',
+  ],
 } as const satisfies { [N in Namespace]: readonly (keyof Api[N])[] }
+
+/**
+ * Events from the main process to the UI. Not part of `Api`, because they
+ * flow the other way: the preload script exposes them as `window.api.events`.
+ */
+export interface EventsApi {
+  /** Called whenever cached mail changed. Returns a function that stops listening. */
+  onMailChanged(listener: (change: MailChange) => void): () => void
+}
+
+export const EVENT_CHANNELS = {
+  mailChanged: 'event:mail-changed',
+} as const
+
+/** What the UI sees as `window.api`. */
+export interface RendererApi extends Api {
+  events: EventsApi
+}
 
 /** IPC channel name for a method, e.g. "mail:listFolders". */
 export function channelName(namespace: string, method: string): string {

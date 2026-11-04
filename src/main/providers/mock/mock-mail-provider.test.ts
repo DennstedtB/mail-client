@@ -1,54 +1,45 @@
-import { describe, expect, it } from 'vitest'
-import { makePreview, MockMailProvider } from './mock-mail-provider'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { MailCache } from '../../cache/mail-cache'
+import { MockMailProvider } from './mock-mail-provider'
 
 const NOW = new Date('2026-11-03T09:00:00Z')
+
+let cache: MailCache
+beforeEach(() => {
+  cache = new MailCache(':memory:')
+})
+afterEach(() => cache.close())
 
 describe('MockMailProvider', () => {
   const provider = new MockMailProvider(NOW)
 
-  it('reports unread and total counts that match the messages', async () => {
-    const folders = await provider.listFolders()
-    for (const folder of folders) {
-      const messages = await provider.listMessages(folder.id)
-      expect(folder.totalCount).toBe(messages.length)
-      expect(folder.unreadCount).toBe(messages.filter((m) => !m.isRead).length)
+  it('fills the cache with folder counts that match its messages', async () => {
+    for (const folder of await provider.listFolders()) {
+      await provider.syncFolder(folder.id, cache)
+      const rows = cache.listMessages(provider.account.id, folder.id)
+      expect(rows).toHaveLength(folder.totalCount)
+      expect(rows.filter((r) => !r.seen)).toHaveLength(folder.unreadCount)
     }
   })
 
-  it('has exactly one inbox', async () => {
+  it('has exactly one inbox, with dates before now and bodies ready', async () => {
     const folders = await provider.listFolders()
     expect(folders.filter((f) => f.role === 'inbox')).toHaveLength(1)
+    await provider.syncFolder('inbox', cache)
+    const rows = cache.listMessages(provider.account.id, 'inbox')
+    expect(Math.max(...rows.map((r) => Date.parse(r.date)))).toBeLessThan(NOW.getTime())
+    expect(cache.uidsWithoutBody(provider.account.id, 'inbox', 100, 1e9)).toEqual([])
   })
 
-  it('lists messages newest first, all dated before now', async () => {
-    const messages = await provider.listMessages('inbox')
-    const times = messages.map((m) => Date.parse(m.date))
-    expect(times).toEqual([...times].sort((a, b) => b - a))
-    expect(Math.max(...times)).toBeLessThan(NOW.getTime())
-  })
-
-  it('returns the full message, or null for an unknown id', async () => {
-    const [first] = await provider.listMessages('inbox')
-    const message = await provider.getMessage(first!.id)
-    expect(message?.bodyText.length).toBeGreaterThan(0)
-    expect(message?.hasAttachments).toBe((message?.attachments.length ?? 0) > 0)
-    await expect(provider.getMessage('does-not-exist')).resolves.toBeNull()
-  })
-})
-
-describe('makePreview', () => {
-  it('collapses whitespace into one line', () => {
-    expect(makePreview('Hello\n\n  world\tagain')).toBe('Hello world again')
-  })
-
-  it('shortens long text with an ellipsis', () => {
-    const preview = makePreview('word '.repeat(100), 20)
-    expect(preview.length).toBeLessThanOrEqual(20)
-    expect(preview.endsWith('…')).toBe(true)
-  })
-
-  it('returns an empty preview for a length limit of zero or less', () => {
-    expect(makePreview('Hello world', 0)).toBe('')
-    expect(makePreview('Hello world', -5)).toBe('')
+  it('returns attachments of sample messages, and reports unknown ones', async () => {
+    await provider.syncFolder('inbox', cache)
+    const withAttachment = cache
+      .listMessages(provider.account.id, 'inbox')
+      .find((r) => r.hasAttachments)!
+    const ref = { folderId: 'inbox', uid: withAttachment.uid }
+    const message = await provider.fetchMessage(ref)
+    const attachment = await provider.fetchAttachment(ref, message.attachments[0]!.id)
+    expect(attachment.content.length).toBeGreaterThan(0)
+    await expect(provider.fetchAttachment(ref, 'nope')).rejects.toThrow('no longer exists')
   })
 })

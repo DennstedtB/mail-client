@@ -2,7 +2,7 @@
 
 A desktop mail and calendar client for macOS, in the spirit of Outlook and Thunderbird. Built with Electron, React and TypeScript.
 
-**Status:** milestone M1. You can add IMAP/SMTP accounts and see their folders; reading messages arrives in M2. Until you add an account, the app shows a sample mailbox.
+**Status:** milestone M2. You can add IMAP/SMTP accounts and read your mail: HTML messages are shown safely with remote images blocked, attachments can be opened or saved, and new mail arrives by push. Writing mail arrives in M3. Until you add an account, the app shows a sample mailbox.
 
 ## Requirements
 

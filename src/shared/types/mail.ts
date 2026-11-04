@@ -52,6 +52,8 @@ export interface MessageSummary {
   date: string
   isRead: boolean
   isFlagged: boolean
+  /** Replied to (IMAP \\Answered). */
+  isAnswered: boolean
   hasAttachments: boolean
 }
 
@@ -67,7 +69,21 @@ export interface Message extends MessageSummary {
   to: Address[]
   cc: Address[]
   bodyText: string
-  /** Raw HTML body. Never render it directly: it must be sanitized first (M2). */
+  /**
+   * HTML body as the sender wrote it. Never render it directly: the UI
+   * sanitizes it and shows it in a sandboxed frame (see sanitize-html.ts).
+   */
   bodyHtml?: string
+  /** Attachments shown to the user; inline images are already part of bodyHtml. */
   attachments: Attachment[]
+}
+
+/** The message list shows at most this many messages of a folder, the newest first. */
+export const MESSAGE_LIST_LIMIT = 1000
+
+/** Sent from the main process when the cache changed, e.g. after a sync or new mail. */
+export interface MailChange {
+  accountId: AccountId
+  /** The folder that changed; absent when the whole account may have changed. */
+  folderId?: FolderId
 }

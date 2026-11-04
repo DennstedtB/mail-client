@@ -29,7 +29,10 @@ function createFakeApi() {
       return [{ accountId, sameThis: this === mail }]
     }),
     listMessages: vi.fn(async () => []),
+    syncFolder: vi.fn(async () => undefined),
     getMessage: vi.fn(async () => null),
+    openAttachment: vi.fn(async () => undefined),
+    saveAttachment: vi.fn(async () => false),
   }
   const app = {
     getInfo: vi.fn(async () => ({ name: 'x', version: '0', platform: 'p', milestone: 'M0' })),
