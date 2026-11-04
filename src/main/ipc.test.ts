@@ -33,6 +33,11 @@ function createFakeApi() {
     getMessage: vi.fn(async () => null),
     openAttachment: vi.fn(async () => undefined),
     saveAttachment: vi.fn(async () => false),
+    setFlags: vi.fn(async () => undefined),
+    moveMessages: vi.fn(async () => undefined),
+    deleteMessages: vi.fn(async () => undefined),
+    createFolder: vi.fn(async () => 'Archive'),
+    search: vi.fn(async () => []),
   }
   const app = {
     getInfo: vi.fn(async () => ({ name: 'x', version: '0', platform: 'p', milestone: 'M0' })),

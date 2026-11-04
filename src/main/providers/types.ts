@@ -12,13 +12,12 @@
  */
 
 import type { Calendar, CalendarEvent, CalendarId, DateRange } from '@shared/types/calendar'
-import type { Account, Folder, FolderId } from '@shared/types/mail'
+import type { Account, FlagChange, Folder, FolderId } from '@shared/types/mail'
 import type { MailCache } from '../cache/mail-cache'
 import type { MessageRef } from '../mail/message-ref'
 import type { AttachmentContent, ParsedMessage } from '../mail/parse-message'
 
-/** IMAP system flags the app changes. */
-export type FlagChange = Partial<Record<'seen' | 'flagged' | 'answered', boolean>>
+export type { FlagChange } from '@shared/types/mail'
 
 /** A message ready to send, built by the compose service. */
 export interface OutgoingMessage {
@@ -58,6 +57,12 @@ export interface MailProvider {
   send(message: OutgoingMessage): Promise<SendOutcome>
   /** Adds or removes flags on messages of one folder. */
   setFlags(folderId: FolderId, uids: number[], change: FlagChange): Promise<void>
+  /** Moves messages of one folder to another folder of the same account. */
+  moveMessages(folderId: FolderId, uids: number[], targetFolderId: FolderId): Promise<void>
+  /** Deletes messages of one folder for good (no trash involved). */
+  deleteMessages(folderId: FolderId, uids: number[]): Promise<void>
+  /** Creates a top-level folder and returns its id. */
+  createFolder(name: string): Promise<FolderId>
   /** Watches for new mail; calls onChange with the folder that changed. Returns a stop function. */
   watch(onChange: (folderId: FolderId) => void): () => void
   /** Closes all connections, e.g. when the account is removed. */

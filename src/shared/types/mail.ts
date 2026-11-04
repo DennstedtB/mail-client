@@ -78,6 +78,9 @@ export interface Message extends MessageSummary {
   attachments: Attachment[]
 }
 
+/** Flags to set (true) or clear (false); flags that are left out stay as they are. */
+export type FlagChange = Partial<Record<'seen' | 'flagged' | 'answered', boolean>>
+
 /** The message list shows at most this many messages of a folder, the newest first. */
 export const MESSAGE_LIST_LIMIT = 1000
 

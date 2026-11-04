@@ -15,6 +15,7 @@ import type { ComposeKind, Draft, DraftAttachment, SendResult } from './types/co
 import type {
   Account,
   AccountId,
+  FlagChange,
   Folder,
   FolderId,
   MailChange,
@@ -59,6 +60,20 @@ export interface MailApi {
   openAttachment(accountId: AccountId, messageId: MessageId, attachmentId: string): Promise<void>
   /** Asks where to save an attachment. False if the user cancelled. */
   saveAttachment(accountId: AccountId, messageId: MessageId, attachmentId: string): Promise<boolean>
+  /** Read / unread, flagged. The list updates at once; the server follows. */
+  setFlags(accountId: AccountId, messageIds: MessageId[], change: FlagChange): Promise<void>
+  /** Moves messages to another folder of the same account (also archive and trash). */
+  moveMessages(
+    accountId: AccountId,
+    messageIds: MessageId[],
+    targetFolderId: FolderId,
+  ): Promise<void>
+  /** Deletes messages for good. The UI asks first. */
+  deleteMessages(accountId: AccountId, messageIds: MessageId[]): Promise<void>
+  /** Creates a top-level folder, e.g. "Archive" on servers that have none. Returns its id. */
+  createFolder(accountId: AccountId, name: string): Promise<FolderId>
+  /** Searches subject, people and downloaded message text in all folders of an account. */
+  search(accountId: AccountId, query: string): Promise<MessageSummary[]>
 }
 
 export interface ComposeApi {
@@ -94,6 +109,11 @@ export const API_METHODS = {
     'getMessage',
     'openAttachment',
     'saveAttachment',
+    'setFlags',
+    'moveMessages',
+    'deleteMessages',
+    'createFolder',
+    'search',
   ],
   compose: ['prepare', 'addAttachments', 'send', 'releaseAttachments'],
 } as const satisfies { [N in Namespace]: readonly (keyof Api[N])[] }

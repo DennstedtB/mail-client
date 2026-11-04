@@ -29,7 +29,7 @@ import { readLimited } from './storage/read-limited'
 import { createAttachmentFiles } from './services/attachment-files'
 import { MailService } from './services/mail-service'
 
-const MILESTONE = 'M3'
+const MILESTONE = 'M4'
 const RENDERER_INDEX = join(__dirname, '../renderer/index.html')
 const DEV_SERVER_URL = app.isPackaged ? undefined : process.env['ELECTRON_RENDERER_URL']
 
