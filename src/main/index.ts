@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { rm } from 'node:fs/promises'
+import { rm, stat } from 'node:fs/promises'
 import {
   app,
   BrowserWindow,
@@ -11,6 +11,7 @@ import {
   session,
   shell,
   type IpcMainInvokeEvent,
+  type OpenDialogOptions,
 } from 'electron'
 import { EVENT_CHANNELS, type Api } from '@shared/ipc-contract'
 import type { MailChange } from '@shared/types/mail'
@@ -19,14 +20,16 @@ import { AccountStore } from './accounts/account-store'
 import { EncryptedSecretStore, type Cipher } from './accounts/secret-store'
 import { createAppUrlCheck } from './app-url'
 import { MailCache } from './cache/mail-cache'
+import { ComposeService } from './compose/compose-service'
 import { registerApi } from './ipc'
 import { connectionChecker } from './providers/imap-smtp/check-connection'
 import { ImapSmtpMailProvider } from './providers/imap-smtp/imap-smtp-mail-provider'
 import { MockMailProvider } from './providers/mock/mock-mail-provider'
+import { readLimited } from './storage/read-limited'
 import { createAttachmentFiles } from './services/attachment-files'
 import { MailService } from './services/mail-service'
 
-const MILESTONE = 'M2'
+const MILESTONE = 'M3'
 const RENDERER_INDEX = join(__dirname, '../renderer/index.html')
 const DEV_SERVER_URL = app.isPackaged ? undefined : process.env['ELECTRON_RENDERER_URL']
 
@@ -112,6 +115,27 @@ function createServices() {
   })
   const mail = new MailService({ source: accounts, cache, emit: emitMailChange, files })
   late.mail = mail
+  const compose = new ComposeService({
+    source: accounts,
+    mail,
+    async pickFiles() {
+      const options: OpenDialogOptions = {
+        title: 'Attach files',
+        properties: ['openFile', 'multiSelections'],
+      }
+      const window = BrowserWindow.getFocusedWindow()
+      const result = window
+        ? await dialog.showOpenDialog(window, options)
+        : await dialog.showOpenDialog(options)
+      return result.canceled ? [] : result.filePaths
+    },
+    async fileSize(path) {
+      const info = await stat(path).catch(() => null)
+      return info?.isFile() ? info.size : null
+    },
+    readFile: readLimited,
+    locale: app.getLocale(),
+  })
 
   const api: Api = {
     app: {
@@ -125,6 +149,7 @@ function createServices() {
     },
     accounts,
     mail,
+    compose,
   }
   return { api, mail, cache }
 }

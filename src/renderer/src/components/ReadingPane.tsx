@@ -21,8 +21,9 @@ import { ToolbarButton } from './ToolbarButton'
 
 const api = window.api
 
-const COMPOSE_LATER = 'coming in M3'
 const ACTIONS_LATER = 'coming in M4'
+
+export type ReplyKind = 'reply' | 'replyAll' | 'forward'
 
 interface EmptyText {
   title: string
@@ -37,17 +38,32 @@ const NO_SELECTION: EmptyText = {
 export function ReadingPane({
   message,
   empty = NO_SELECTION,
+  onCompose,
+  composeUnavailable,
 }: {
   message: AsyncState<Message | null>
   /** What to say while nothing is shown. */
   empty?: EmptyText
+  onCompose: (kind: ReplyKind, message: Message) => void
+  /** Why replying isn't possible for this account, e.g. in the sample mailbox. */
+  composeUnavailable?: string
 }) {
+  const shown = message.status === 'ready' ? message.data : null
+  const replyUnavailable = composeUnavailable ?? (shown ? undefined : 'select a message first')
+  const replyButton = (kind: ReplyKind, icon: typeof Reply, label: string) => (
+    <ToolbarButton
+      icon={icon}
+      label={label}
+      unavailableReason={replyUnavailable}
+      onClick={() => shown && onCompose(kind, shown)}
+    />
+  )
   return (
     <section aria-label="Reading pane" className="flex min-w-0 flex-1 flex-col bg-paper">
       <div className="drag-region flex h-[52px] shrink-0 items-center gap-0.5 border-b border-line px-4">
-        <ToolbarButton icon={Reply} label="Reply" unavailableReason={COMPOSE_LATER} />
-        <ToolbarButton icon={ReplyAll} label="Reply all" unavailableReason={COMPOSE_LATER} />
-        <ToolbarButton icon={Forward} label="Forward" unavailableReason={COMPOSE_LATER} />
+        {replyButton('reply', Reply, 'Reply')}
+        {replyButton('replyAll', ReplyAll, 'Reply all')}
+        {replyButton('forward', Forward, 'Forward')}
         <div className="mx-2 h-5 w-px bg-line" />
         <ToolbarButton icon={Archive} label="Archive" unavailableReason={ACTIONS_LATER} />
         <ToolbarButton icon={Trash2} label="Delete" unavailableReason={ACTIONS_LATER} />

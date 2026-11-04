@@ -1,11 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
+import type { ComposeKind, Draft } from '@shared/types/compose'
 import type { Account, MessageId, MessageSummary } from '@shared/types/mail'
 import { AddAccountDialog } from './components/AddAccountDialog'
 import { CalendarPlaceholder } from './components/CalendarPlaceholder'
+import { ComposePane, type SentInfo } from './components/ComposePane'
+import { DiscardDraftDialog } from './components/DiscardDraftDialog'
 import { MessageList, type SyncState } from './components/MessageList'
 import { ReadingPane } from './components/ReadingPane'
 import { RemoveAccountDialog } from './components/RemoveAccountDialog'
 import { Sidebar, type AccountFolders, type FolderSelection, type View } from './components/Sidebar'
+import { Toast, type ToastMessage } from './components/Toast'
 import { errorMessage } from './lib/errors'
 import { useAsync, type AsyncState } from './lib/use-async'
 import { useToday } from './lib/use-today'
@@ -24,7 +28,60 @@ export function App() {
   const [syncResult, setSyncResult] = useState<{ key: string; state: SyncState } | null>(null)
   const [adding, setAdding] = useState(false)
   const [removing, setRemoving] = useState<Account | null>(null)
+  const [compose, setCompose] = useState<{ draft: Draft; key: number } | null>(null)
+  const composeChanged = useRef(false)
+  // What to do after "Discard this message?" is answered. A ref, so a send that
+  // finishes while the question is open sees the current value.
+  const pendingAction = useRef<(() => void) | null>(null)
+  const [askingToDiscard, setAskingToDiscard] = useState(false)
+  // Only the newest "prepare a draft" request may open the compose pane.
+  const prepareRequest = useRef(0)
+  const [toast, setToast] = useState<ToastMessage | null>(null)
   const today = useToday()
+
+  const showToast = useCallback((text: string, tone: ToastMessage['tone'] = 'done') => {
+    setToast({ id: Date.now(), text, tone })
+  }, [])
+  const hideToast = useCallback(() => setToast(null), [])
+  const setComposeChanged = useCallback((changed: boolean) => {
+    composeChanged.current = changed
+  }, [])
+
+  /** Runs an action that leaves the compose pane; asks first if that would lose changes. */
+  function leaveCompose(action: () => void) {
+    prepareRequest.current += 1 // Navigating supersedes a draft that is still being prepared.
+    if (!compose) return action()
+    if (composeChanged.current) {
+      pendingAction.current = action
+      setAskingToDiscard(true)
+      return
+    }
+    setCompose(null)
+    action()
+  }
+
+  function closeCompose() {
+    setCompose(null)
+    composeChanged.current = false
+    // Closed while "Discard this message?" was open (it was sent): nothing is lost, so go on.
+    const action = pendingAction.current
+    pendingAction.current = null
+    setAskingToDiscard(false)
+    action?.()
+  }
+
+  const showSent = useCallback(
+    ({ copySaved, rejected }: SentInfo) => {
+      if (rejected.length > 0) {
+        showToast(`Message sent, but the server refused: ${rejected.join(', ')}`, 'problem')
+      } else if (!copySaved) {
+        showToast("Message sent. Its copy couldn't be saved in Sent.", 'problem')
+      } else {
+        showToast('Message sent')
+      }
+    },
+    [showToast],
+  )
 
   // The main process announces every change to cached mail: syncs, new mail via IDLE.
   useEffect(() => api.events.onMailChanged(() => setMailVersion((v) => v + 1)), [])
@@ -100,6 +157,56 @@ export function App() {
     openMessageId ? `message:${openMessageId}` : undefined,
   )
 
+  const composeAccount = accountList?.find(
+    (a) => a.id === (compose?.draft.accountId ?? selection?.accountId),
+  )
+  const composeUnavailable =
+    composeAccount?.kind === 'mock' ? 'not available in the sample mailbox' : undefined
+
+  function startCompose(kind: ComposeKind, accountId: string, sourceMessageId?: MessageId) {
+    leaveCompose(() => {
+      const request = ++prepareRequest.current
+      api.compose.prepare(kind, accountId, sourceMessageId).then(
+        (draft) => {
+          if (request !== prepareRequest.current) {
+            // Superseded: the main process can forget its forwarded attachments.
+            const ids = draft.attachments.map((a) => a.id)
+            if (ids.length > 0) void api.compose.releaseAttachments(ids).catch(() => undefined)
+            return
+          }
+          composeChanged.current = false
+          setCompose({ draft, key: Date.now() })
+        },
+        (error: unknown) => {
+          if (request === prepareRequest.current) {
+            showToast(`Couldn't start the message: ${errorMessage(error)}`, 'problem')
+          }
+        },
+      )
+    })
+  }
+
+  // ⌘N starts a new message, as in other mail apps.
+  const newMessage = useEffectEvent(() => {
+    if (view === 'mail' && selection && !composeUnavailable)
+      startCompose('new', selection.accountId)
+  })
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key === 'n' &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        !event.altKey
+      ) {
+        event.preventDefault()
+        newMessage()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   const listState: AsyncState<MessageSummary[]> =
     messages.status === 'error'
       ? { status: 'error', message: `Messages could not be loaded: ${messages.message}` }
@@ -109,16 +216,23 @@ export function App() {
     <div className="flex h-full">
       <Sidebar
         view={view}
-        onViewChange={setView}
+        onViewChange={(next) => leaveCompose(() => setView(next))}
         accounts={accounts}
         folders={folders}
         selection={selection}
-        onSelectFolder={(next) => {
-          setChosen(next)
-          setSelectedMessageId(null)
-        }}
+        onSelectFolder={(next) =>
+          leaveCompose(() => {
+            setChosen(next)
+            setSelectedMessageId(null)
+          })
+        }
         onAddAccount={() => setAdding(true)}
-        onRemoveAccount={setRemoving}
+        onRemoveAccount={(account) =>
+          // Removing the account of the open draft closes the draft, so ask first.
+          compose?.draft.accountId === account.id
+            ? leaveCompose(() => setRemoving(account))
+            : setRemoving(account)
+        }
         appInfo={appInfo.status === 'ready' ? appInfo.data : undefined}
       />
 
@@ -128,12 +242,29 @@ export function App() {
             folder={folder}
             messages={listState}
             selectedId={openMessageId}
-            onSelect={setSelectedMessageId}
+            onSelect={(id) => leaveCompose(() => setSelectedMessageId(id))}
             today={today}
             sync={sync}
             onRefresh={() => setSyncRequest((n) => n + 1)}
+            onNewMessage={() => selection && startCompose('new', selection.accountId)}
+            newMessageUnavailable={composeUnavailable}
           />
-          <ReadingPane message={message} />
+          {compose && composeAccount ? (
+            <ComposePane
+              key={compose.key}
+              initial={compose.draft}
+              account={composeAccount}
+              onSent={showSent}
+              onClose={closeCompose}
+              onChangedChange={setComposeChanged}
+            />
+          ) : (
+            <ReadingPane
+              message={message}
+              onCompose={(kind, source) => startCompose(kind, source.accountId, source.id)}
+              composeUnavailable={composeUnavailable}
+            />
+          )}
         </>
       ) : (
         <CalendarPlaceholder now={today} />
@@ -150,6 +281,15 @@ export function App() {
         }}
         showLocalPreset={appInfo.status === 'ready' && appInfo.data.isDevelopment}
       />
+      <DiscardDraftDialog
+        open={askingToDiscard}
+        onCancel={() => {
+          pendingAction.current = null
+          setAskingToDiscard(false)
+        }}
+        onDiscard={closeCompose}
+      />
+      <Toast toast={toast} onDone={hideToast} />
       <RemoveAccountDialog
         account={removing}
         onClose={() => setRemoving(null)}

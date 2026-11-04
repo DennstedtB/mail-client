@@ -12,7 +12,8 @@ import {
  * Electron's Node; no native module). It is only a cache: the schema version
  * is checked on open, and a mismatch simply rebuilds it from the server.
  */
-const SCHEMA_VERSION = 1
+/** 2: bodies keep Reply-To (M3). A different version rebuilds the cache from the servers. */
+const SCHEMA_VERSION = 2
 
 const SCHEMA = `
 CREATE TABLE folder_state (
@@ -87,11 +88,13 @@ export interface CachedRow extends CachedEnvelope {
   preview: string
 }
 
-/** Headers needed later for replies (M3). */
+/** Headers needed for replies. */
 export interface BodyHeaders {
   messageId?: string
   inReplyTo?: string
   references: string[]
+  /** Reply-To; absent in bodies cached before M3, which is treated as none. */
+  replyTo?: Address[]
 }
 
 export interface CachedBody {

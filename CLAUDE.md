@@ -27,22 +27,23 @@ Electron with three isolated parts and one shared contract:
 | `src/renderer/` | Chromium, no Node access | React UI only                                                        |
 | `src/shared/`   | Imported by all three    | Domain types and the IPC contract. No runtime dependencies.          |
 
-Data flow: UI → `window.api.mail.listMessages()` → preload → `ipcRenderer.invoke('mail:listMessages')` → `registerApi` in `src/main/ipc.ts` → `MailService` → local cache. `mail.syncFolder()` makes the account's `MailProvider` bring the cache up to date; afterwards the main process sends a `MailChange` event (`window.api.events.onMailChanged`) and the UI reloads from the cache. New mail arrives the same way: a watcher connection idles on the inbox (IMAP IDLE) and triggers a sync.
+Data flow: UI → `window.api.mail.listMessages()` → preload → `ipcRenderer.invoke('mail:listMessages')` → `registerApi` in `src/main/ipc.ts` → `MailService` → local cache. `mail.syncFolder()` makes the account's `MailProvider` bring the cache up to date; afterwards the main process sends a `MailChange` event (`window.api.events.onMailChanged`) and the UI reloads from the cache. New mail arrives the same way: a watcher connection idles on the inbox (IMAP IDLE) and triggers a sync. Sending: `compose.prepare()` returns a `Draft` (recipients, quote, forwarded attachments), the UI edits it, `compose.send()` builds the message in the main process and hands it to the provider (SMTP, then APPEND to Sent).
 
 Main-process modules:
 
-| Path                                    | Responsibility                                                                                                                           |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/main/accounts/account-service.ts`  | Adds, lists, removes accounts; owns one provider per account; sample mailbox while none exists                                           |
-| `src/main/accounts/account-store.ts`    | Account settings in `accounts.json` (no passwords)                                                                                       |
-| `src/main/accounts/secret-store.ts`     | Passwords in `credentials.json`, encrypted with `safeStorage` (Keychain key)                                                             |
-| `src/main/providers/imap-smtp/`         | ImapFlow / Nodemailer: connection options, connection check, readable errors, folders, folder sync, persistent connection + IDLE watcher |
-| `src/main/cache/mail-cache.ts`          | Local cache (`node:sqlite`, built into Electron): envelopes, flags, bodies, FTS5 search index. Rebuilt when the schema version changes   |
-| `src/main/mail/`                        | Message ids (`message-ref.ts`: folder + UID, opaque to the UI), parsing with mailparser (`parse-message.ts`)                             |
-| `src/main/services/mail-service.ts`     | Mail part of the contract: lists from the cache, sync, body download and prefetch, watchers per account                                  |
-| `src/main/services/attachment-files.ts` | Opening (temp folder, never files that run code) and saving attachments                                                                  |
-| `src/main/providers/mock/`              | Sample mailbox                                                                                                                           |
-| `src/main/storage/json-file.ts`         | Atomic JSON writes (0600), write queue                                                                                                   |
+| Path                                    | Responsibility                                                                                                                                                    |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/main/accounts/account-service.ts`  | Adds, lists, removes accounts; owns one provider per account; sample mailbox while none exists                                                                    |
+| `src/main/accounts/account-store.ts`    | Account settings in `accounts.json` (no passwords)                                                                                                                |
+| `src/main/accounts/secret-store.ts`     | Passwords in `credentials.json`, encrypted with `safeStorage` (Keychain key)                                                                                      |
+| `src/main/providers/imap-smtp/`         | ImapFlow / Nodemailer: connection options, connection check, readable errors, folders, folder sync, persistent connection + IDLE watcher, send + Sent copy, flags |
+| `src/main/cache/mail-cache.ts`          | Local cache (`node:sqlite`, built into Electron): envelopes, flags, bodies, FTS5 search index. Rebuilt when the schema version changes                            |
+| `src/main/mail/`                        | Message ids (`message-ref.ts`: folder + UID, opaque to the UI), parsing with mailparser (`parse-message.ts`)                                                      |
+| `src/main/services/mail-service.ts`     | Mail part of the contract: lists from the cache, sync, body download and prefetch, watchers per account                                                           |
+| `src/main/services/attachment-files.ts` | Opening (temp folder, never files that run code) and saving attachments                                                                                           |
+| `src/main/compose/`                     | Drafts for new / reply / forward (`drafts.ts`), attachment tokens, building the MIME message (Nodemailer MailComposer), sending                                   |
+| `src/main/providers/mock/`              | Sample mailbox                                                                                                                                                    |
+| `src/main/storage/json-file.ts`         | Atomic JSON writes (0600), write queue                                                                                                                            |
 
 Data lives in `app.getPath('userData')`, on macOS `~/Library/Application Support/MailClient`.
 
@@ -67,6 +68,7 @@ Data lives in `app.getPath('userData')`, on macOS `~/Library/Application Support
 - ImapFlow and Nodemailer run with `logger: false`; nothing about accounts goes to the console.
 - HTML mail: sanitized with DOMPurify, shown in an iframe with `sandbox="allow-popups allow-popups-to-escape-sandbox"` (no scripts, no same-origin), and a CSP inside the frame that blocks all remote content until the user clicks "Load images" for that message (`lib/sanitize-html.ts`). Links open in the default browser.
 - Attachments open from a private temp folder; file types that can run code (apps, scripts, installers, HTML, …) are never opened directly, only saved.
+- Outgoing attachments: the UI only holds tokens issued by the main process (files the user picked in the system dialog, or attachments of the message being forwarded), never paths. Bcc is removed from the message sent over SMTP and kept only in the Sent copy.
 
 ## Conventions
 
@@ -85,18 +87,18 @@ Data lives in `app.getPath('userData')`, on macOS `~/Library/Application Support
 
 Quiet native chrome in the system font; the message is the focus, set in Source Serif 4 (bundled, `font-serif`). One accent color, petrol, used for unread markers, selection and focus.
 
-Tokens are CSS variables in `src/renderer/src/index.css` (light and dark) and mapped to Tailwind colors: `paper`, `surface`, `sidebar`, `ink`, `ink-muted`, `ink-faint`, `line`, `accent`, `accent-soft`, `selection`, `selection-ink`, `danger` and `danger-contrast` (errors and destructive actions). Use these instead of raw colors. Toolbars are 52px high and act as window drag regions (`drag-region`; interactive children need `no-drag`). Dialogs use the native `<dialog>` via `components/Modal.tsx`.
+Tokens are CSS variables in `src/renderer/src/index.css` (light and dark) and mapped to Tailwind colors: `paper`, `surface`, `sidebar`, `ink`, `ink-muted`, `ink-faint`, `line`, `accent`, `accent-soft`, `accent-contrast` (text on accent), `selection`, `selection-ink`, `danger` and `danger-contrast` (errors and destructive actions). Use these instead of raw colors. Toolbars are 52px high and act as window drag regions (`drag-region`; interactive children need `no-drag`). Dialogs use the native `<dialog>` via `components/Modal.tsx`.
 
 ## Libraries
 
-In use: ImapFlow 2 (IMAP), Nodemailer 10 (SMTP), mailparser 3 (MIME), DOMPurify 3 (HTML sanitizing, renderer), `node:sqlite` (cache; no native module, no ORM). Planned: tsdav (CalDAV), ical.js (iCalendar and recurrence), FullCalendar (calendar views), @azure/msal-node + Microsoft Graph (M6). Check the current version and maintenance status before adding any of them.
+In use: ImapFlow 2 (IMAP), Nodemailer 10 (SMTP, MailComposer, addressparser), mailparser 3 (MIME), DOMPurify 3 (HTML sanitizing, renderer), `node:sqlite` (cache; no native module, no ORM). Planned: tsdav (CalDAV), ical.js (iCalendar and recurrence), FullCalendar (calendar views), @azure/msal-node + Microsoft Graph (M6). Check the current version and maintenance status before adding any of them.
 
 ## Milestones
 
 - [x] **M0 Scaffold:** Electron + React + TypeScript, typed IPC contract, provider interfaces, mock provider, three-pane layout, calendar placeholder, tooling, Stalwart dev server
 - [x] **M1 Account setup:** manual IMAP/SMTP configuration, connection check with readable errors, password in the Keychain, real folders with unread counts, one sidebar section per account, remove account
 - [x] **M2 Reading mail:** local cache, folder sync, message list and view, safe HTML rendering, attachments (open / save), push for new mail (IMAP IDLE)
-- [ ] **M3 Writing mail:** compose, reply / forward, attachments, send, save to Sent
+- [x] **M3 Writing mail:** compose, reply / forward, attachments, send, save to Sent
 - [ ] **M4 Mail actions:** read / unread, flag, move, delete, local search
 - [ ] **M5 Calendar:** CalDAV, day / week / month views, create / edit / delete events, show recurring events
 - [ ] **M6 Microsoft 365:** Entra app registration, MSAL sign-in, Graph mail and calendar providers

@@ -11,6 +11,7 @@
  */
 
 import type { AddAccountResult, NewAccountInput } from './types/account'
+import type { ComposeKind, Draft, DraftAttachment, SendResult } from './types/compose'
 import type {
   Account,
   AccountId,
@@ -60,10 +61,25 @@ export interface MailApi {
   saveAttachment(accountId: AccountId, messageId: MessageId, attachmentId: string): Promise<boolean>
 }
 
+export interface ComposeApi {
+  /**
+   * A draft to start from: empty for a new message; for replies and forwards
+   * with recipients, subject, quoted text and (forward) the original attachments.
+   */
+  prepare(kind: ComposeKind, accountId: AccountId, sourceMessageId?: MessageId): Promise<Draft>
+  /** Opens the system file dialog. Returns the picked files, or [] if cancelled. */
+  addAttachments(): Promise<DraftAttachment[]>
+  /** Sends the draft and saves a copy in the Sent folder. */
+  send(draft: Draft): Promise<SendResult>
+  /** Forgets attachment tokens: of a removed attachment, or of a draft that was discarded. */
+  releaseAttachments(ids: string[]): Promise<void>
+}
+
 export interface Api {
   app: AppApi
   accounts: AccountsApi
   mail: MailApi
+  compose: ComposeApi
 }
 
 export type Namespace = keyof Api
@@ -79,6 +95,7 @@ export const API_METHODS = {
     'openAttachment',
     'saveAttachment',
   ],
+  compose: ['prepare', 'addAttachments', 'send', 'releaseAttachments'],
 } as const satisfies { [N in Namespace]: readonly (keyof Api[N])[] }
 
 /**

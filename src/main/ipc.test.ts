@@ -37,7 +37,13 @@ function createFakeApi() {
   const app = {
     getInfo: vi.fn(async () => ({ name: 'x', version: '0', platform: 'p', milestone: 'M0' })),
   }
-  return { app, accounts, mail } as const
+  const compose = {
+    prepare: vi.fn(async () => ({})),
+    addAttachments: vi.fn(async () => []),
+    send: vi.fn(async () => ({ status: 'sent', copySaved: true })),
+    releaseAttachments: vi.fn(async () => undefined),
+  }
+  return { app, accounts, mail, compose } as const
 }
 
 const isTrusted = (event: IpcMainInvokeEvent) => event.senderFrame?.url === 'app://ui'
