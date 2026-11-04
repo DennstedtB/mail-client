@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
 import type { ComposeKind, Draft } from '@shared/types/compose'
-import type { Account, MessageId, MessageSummary } from '@shared/types/mail'
+import type { Account, Folder, Message, MessageId, MessageSummary } from '@shared/types/mail'
 import { AddAccountDialog } from './components/AddAccountDialog'
 import { CalendarPlaceholder } from './components/CalendarPlaceholder'
 import { ComposePane, type ComposeOutcome } from './components/ComposePane'
+import { ConfirmDialog } from './components/ConfirmDialog'
 import { DiscardDraftDialog } from './components/DiscardDraftDialog'
 import { MessageList, type SyncState } from './components/MessageList'
-import { ReadingPane } from './components/ReadingPane'
+import { ReadingPane, type MessageAction } from './components/ReadingPane'
 import { RemoveAccountDialog } from './components/RemoveAccountDialog'
 import { Sidebar, type AccountFolders, type FolderSelection, type View } from './components/Sidebar'
 import { Toast, type ToastMessage } from './components/Toast'
@@ -32,7 +33,16 @@ export function App() {
   const composeChanged = useRef(false)
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
   const [toast, setToast] = useState<ToastMessage | null>(null)
+  const [searchText, setSearchText] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState<MessageSummary | null>(null)
   const today = useToday()
+
+  // Search as you type, once typing pauses.
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchQuery(searchText.trim()), 200)
+    return () => clearTimeout(timer)
+  }, [searchText])
 
   const showToast = useCallback((text: string, tone: ToastMessage['tone'] = 'done') => {
     setToast({ id: Date.now(), text, tone })
@@ -113,19 +123,108 @@ export function App() {
   const sync: SyncState =
     syncResult && syncResult.key === syncKey ? syncResult.state : { status: 'running' }
 
+  // The list shows search results (all folders of the account) or the selected folder.
+  const searchAccountId = searchQuery && selection ? selection.accountId : null
   const messages = useAsync(
-    folder ? `messages:${folder.accountId}:${folder.id}:${mailVersion}` : null,
-    () => api.mail.listMessages(folder!.accountId, folder!.id),
-    folder ? `messages:${folder.accountId}:${folder.id}` : undefined,
+    searchAccountId
+      ? `search:${searchAccountId}:${searchQuery}:${mailVersion}`
+      : folder
+        ? `messages:${folder.accountId}:${folder.id}:${mailVersion}`
+        : null,
+    () =>
+      searchAccountId
+        ? api.mail.search(searchAccountId, searchQuery)
+        : api.mail.listMessages(folder!.accountId, folder!.id),
+    searchAccountId
+      ? `search:${searchAccountId}`
+      : folder
+        ? `messages:${folder.accountId}:${folder.id}`
+        : undefined,
   )
-  const messageInList =
-    messages.status === 'ready' && messages.data.some((m) => m.id === selectedMessageId)
-  const openMessageId = messageInList ? selectedMessageId : null
+  const items = messages.status === 'ready' ? messages.data : []
+  const openSummary = items.find((m) => m.id === selectedMessageId)
+  const openMessageId = openSummary?.id ?? null
   const message = useAsync(
-    folder && openMessageId ? `message:${folder.accountId}:${openMessageId}:${mailVersion}` : null,
-    () => api.mail.getMessage(folder!.accountId, openMessageId!),
-    openMessageId ? `message:${openMessageId}` : undefined,
+    openSummary ? `message:${openSummary.accountId}:${openSummary.id}:${mailVersion}` : null,
+    () => api.mail.getMessage(openSummary!.accountId, openSummary!.id),
+    openSummary ? `message:${openSummary.id}` : undefined,
   )
+  const accountFolderList: Folder[] =
+    accountFolders?.status === 'ready' ? accountFolders.folders : []
+
+  // Opening a message marks it as read, once per opening.
+  const markedRead = useRef<MessageId | null>(null)
+  useEffect(() => {
+    if (message.status !== 'ready' || !message.data) return
+    const opened = message.data
+    if (markedRead.current === opened.id) return
+    markedRead.current = opened.id
+    if (!opened.isRead) {
+      api.mail.setFlags(opened.accountId, [opened.id], { seen: true }).catch(() => undefined)
+    }
+  }, [message])
+
+  /** After a message leaves the list, the next one (or the one before) is selected. */
+  function selectNeighbour(of: MessageSummary) {
+    if (selectedMessageId !== of.id) return
+    const index = items.findIndex((m) => m.id === of.id)
+    setSelectedMessageId(items[index + 1]?.id ?? items[index - 1]?.id ?? null)
+  }
+
+  async function moveTo(target: Folder, of: MessageSummary, done: string) {
+    selectNeighbour(of)
+    await api.mail.moveMessages(of.accountId, [of.id], target.id)
+    showToast(done)
+  }
+
+  async function runAction(action: MessageAction, of: Message | MessageSummary) {
+    const archive = accountFolderList.find((f) => f.role === 'archive')
+    const trash = accountFolderList.find((f) => f.role === 'trash')
+    try {
+      switch (action.type) {
+        case 'flag':
+          await api.mail.setFlags(of.accountId, [of.id], { flagged: action.flagged })
+          break
+        case 'read':
+          await api.mail.setFlags(of.accountId, [of.id], { seen: action.read })
+          break
+        case 'archive': {
+          // Servers without an archive folder get one, as in Thunderbird.
+          const target = archive ?? (await createArchive(of.accountId))
+          await moveTo(target, of, 'Archived')
+          break
+        }
+        case 'move': {
+          const target = accountFolderList.find((f) => f.id === action.folderId)
+          if (target) await moveTo(target, of, `Moved to ${target.name}`)
+          break
+        }
+        case 'delete':
+          // In the trash (or without one), deleting is for good, so ask first.
+          if (!trash || of.folderId === trash.id) setConfirmDelete(of)
+          else await moveTo(trash, of, `Moved to ${trash.name}`)
+          break
+      }
+    } catch (error) {
+      showToast(`That didn't work: ${errorMessage(error)}`, 'problem')
+    }
+  }
+
+  async function createArchive(accountId: string): Promise<Folder> {
+    const id = await api.mail.createFolder(accountId, 'Archive')
+    return { id, accountId, name: 'Archive', role: 'archive', unreadCount: 0, totalCount: 0 }
+  }
+
+  async function deleteForGood(of: MessageSummary) {
+    setConfirmDelete(null)
+    selectNeighbour(of)
+    try {
+      await api.mail.deleteMessages(of.accountId, [of.id])
+      showToast('Deleted')
+    } catch (error) {
+      showToast(`The message couldn't be deleted: ${errorMessage(error)}`, 'problem')
+    }
+  }
 
   const composeAccount = accountList?.find(
     (a) => a.id === (compose?.draft.accountId ?? selection?.accountId),
@@ -185,7 +284,10 @@ export function App() {
 
   const listState: AsyncState<MessageSummary[]> =
     messages.status === 'error'
-      ? { status: 'error', message: `Messages could not be loaded: ${messages.message}` }
+      ? {
+          status: 'error',
+          message: `${searchAccountId ? 'Search failed' : 'Messages could not be loaded'}: ${messages.message}`,
+        }
       : messages
 
   return (
@@ -200,6 +302,8 @@ export function App() {
           leaveCompose(() => {
             setChosen(next)
             setSelectedMessageId(null)
+            setSearchText('')
+            setSearchQuery('')
           })
         }
         onAddAccount={() => setAdding(true)}
@@ -219,6 +323,20 @@ export function App() {
             onRefresh={() => setSyncRequest((n) => n + 1)}
             onNewMessage={() => selection && startCompose('new', selection.accountId)}
             newMessageUnavailable={composeUnavailable}
+            onDelete={(id) => {
+              const target = items.find((m) => m.id === id)
+              if (target) void runAction({ type: 'delete' }, target)
+            }}
+            search={{
+              text: searchText,
+              onTextChange: (text) => {
+                setSearchText(text)
+                // Clearing returns to the folder at once, without waiting for the pause.
+                if (!text.trim()) setSearchQuery('')
+              },
+              active: Boolean(searchAccountId),
+              folderName: (id) => accountFolderList.find((f) => f.id === id)?.name,
+            }}
           />
           {compose && composeAccount ? (
             <ComposePane
@@ -233,6 +351,8 @@ export function App() {
               message={message}
               onCompose={(kind, source) => startCompose(kind, source.accountId, source.id)}
               composeUnavailable={composeUnavailable}
+              onAction={(action, of) => void runAction(action, of)}
+              folders={accountFolderList}
             />
           )}
         </>
@@ -261,6 +381,14 @@ export function App() {
           composeChanged.current = false
           action?.()
         }}
+      />
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title="Delete this message for good?"
+        text="It's removed from the server and can't be restored."
+        confirmLabel="Delete"
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={() => confirmDelete && void deleteForGood(confirmDelete)}
       />
       <Toast toast={toast} onDone={hideToast} />
       <RemoveAccountDialog

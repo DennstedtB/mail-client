@@ -29,6 +29,7 @@ export class MockMailProvider implements MailProvider {
   }
 
   private readonly messages: StoredMock[]
+  private readonly folders = [...MOCK_FOLDERS]
 
   constructor(now: Date = new Date()) {
     this.messages = MOCK_MESSAGES.map((m, index) => ({
@@ -40,7 +41,7 @@ export class MockMailProvider implements MailProvider {
   }
 
   async listFolders(): Promise<Folder[]> {
-    return MOCK_FOLDERS.map((folder) => {
+    return this.folders.map((folder) => {
       const inFolder = this.messages.filter((m) => m.folderId === folder.id)
       return {
         ...folder,
@@ -106,6 +107,31 @@ export class MockMailProvider implements MailProvider {
       if (change.seen !== undefined) m.isRead = change.seen
       if (change.flagged !== undefined) m.isFlagged = change.flagged
       if (change.answered !== undefined) m.answered = change.answered
+    }
+  }
+
+  async moveMessages(folderId: FolderId, uids: number[], targetFolderId: FolderId) {
+    // New UIDs in the target folder, as an IMAP server would assign them.
+    let next = Math.max(0, ...this.messages.map((m) => m.uid)) + 1
+    for (const m of this.messages) {
+      if (m.folderId === folderId && uids.includes(m.uid)) {
+        m.folderId = targetFolderId
+        m.uid = next++
+      }
+    }
+  }
+
+  async createFolder(name: string): Promise<FolderId> {
+    if (!this.folders.some((f) => f.id === name)) {
+      this.folders.push({ id: name, name, role: 'custom' })
+    }
+    return name
+  }
+
+  async deleteMessages(folderId: FolderId, uids: number[]) {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i]
+      if (m && m.folderId === folderId && uids.includes(m.uid)) this.messages.splice(i, 1)
     }
   }
 

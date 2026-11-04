@@ -110,6 +110,48 @@ export class ImapSmtpMailProvider implements MailProvider {
     }
   }
 
+  /** Runs work with the folder selected read-write (SELECT); syncs use read-only (EXAMINE). */
+  private async inFolder(folderId: FolderId, work: (client: ImapFlow) => Promise<void>) {
+    try {
+      await this.connection.use(async (client) => {
+        const lock = await client.getMailboxLock(folderId)
+        try {
+          await work(client)
+        } finally {
+          lock.release()
+        }
+      })
+    } catch (error) {
+      throw readable(error)
+    }
+  }
+
+  async moveMessages(folderId: FolderId, uids: number[], targetFolderId: FolderId) {
+    if (uids.length === 0) return
+    // ImapFlow uses MOVE, or COPY + delete on servers without it.
+    await this.inFolder(folderId, async (client) => {
+      const result = await client.messageMove(uids.join(','), targetFolderId, { uid: true })
+      if (!result) throw new Error("The server couldn't move the messages.")
+    })
+  }
+
+  async deleteMessages(folderId: FolderId, uids: number[]) {
+    if (uids.length === 0) return
+    await this.inFolder(folderId, async (client) => {
+      const deleted = await client.messageDelete(uids.join(','), { uid: true })
+      if (!deleted) throw new Error("The server couldn't delete the messages.")
+    })
+  }
+
+  async createFolder(name: string): Promise<FolderId> {
+    try {
+      // ImapFlow adds the namespace prefix ("INBOX.") where the server needs one.
+      return await this.connection.use(async (client) => (await client.mailboxCreate(name)).path)
+    } catch (error) {
+      throw readable(error)
+    }
+  }
+
   async setFlags(folderId: FolderId, uids: number[], change: FlagChange) {
     if (uids.length === 0) return
     const add: string[] = []
@@ -118,21 +160,11 @@ export class ImapSmtpMailProvider implements MailProvider {
       const value = change[key]
       if (value !== undefined) (value ? add : remove).push(IMAP_FLAGS[key])
     }
-    try {
-      await this.connection.use(async (client) => {
-        // A read-write lock (SELECT); syncs use read-only ones (EXAMINE).
-        const lock = await client.getMailboxLock(folderId)
-        try {
-          const range = uids.join(',')
-          if (add.length > 0) await client.messageFlagsAdd(range, add, { uid: true })
-          if (remove.length > 0) await client.messageFlagsRemove(range, remove, { uid: true })
-        } finally {
-          lock.release()
-        }
-      })
-    } catch (error) {
-      throw readable(error)
-    }
+    await this.inFolder(folderId, async (client) => {
+      const range = uids.join(',')
+      if (add.length > 0) await client.messageFlagsAdd(range, add, { uid: true })
+      if (remove.length > 0) await client.messageFlagsRemove(range, remove, { uid: true })
+    })
   }
 
   watch(onChange: (folderId: FolderId) => void): () => void {

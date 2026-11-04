@@ -106,6 +106,12 @@ export interface CachedBody {
   cc: Address[]
 }
 
+/** What the cache holds of one message, to put it back if a move or delete fails. */
+export interface CachedMessage {
+  row: CachedRow
+  body: CachedBody | null
+}
+
 export interface FolderState {
   uidValidity: string
   highestUid: number
@@ -158,7 +164,9 @@ export class MailCache {
     })
   }
 
+  /** Runs work in one transaction; nested calls join the outer one. */
   private transaction<T>(work: () => T): T {
+    if (this.db.isTransaction) return work()
     this.db.exec('BEGIN')
     try {
       const result = work()
@@ -282,6 +290,28 @@ export class MailCache {
           `DELETE FROM ${table} WHERE account_id = ? AND folder = ? AND uid = ?`,
         )
         for (const uid of uids) statement.run(accountId, folder, uid)
+      }
+    })
+  }
+
+  /** Copies of these messages (envelope and body), for restore(). */
+  snapshot(accountId: AccountId, folder: FolderId, uids: number[]): CachedMessage[] {
+    return uids.flatMap((uid) => {
+      const row = this.getMessage(accountId, folder, uid)
+      return row ? [{ row, body: this.getBody(accountId, folder, uid) }] : []
+    })
+  }
+
+  /** Puts messages from snapshot() back, e.g. after the server refused to move them. */
+  restore(accountId: AccountId, folder: FolderId, messages: CachedMessage[]) {
+    this.transaction(() => {
+      this.upsertMessages(
+        accountId,
+        folder,
+        messages.map((m) => m.row),
+      )
+      for (const m of messages) {
+        if (m.body) this.setBody(accountId, folder, m.row.uid, m.body)
       }
     })
   }

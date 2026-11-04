@@ -71,17 +71,45 @@ describe('MailService', () => {
         report = onChange
         return () => {}
       })
-      const sync = vi.spyOn(provider, 'syncFolder').mockRejectedValueOnce(new Error('offline'))
+      const original = provider.syncFolder.bind(provider)
+      let failed = false
+      const sync = vi.spyOn(provider, 'syncFolder').mockImplementation(async (folderId, c) => {
+        if (folderId === 'inbox' && !failed) {
+          failed = true
+          throw new Error('offline')
+        }
+        return original(folderId, c)
+      })
+      const inboxSyncs = () => sync.mock.calls.filter(([folderId]) => folderId === 'inbox').length
       const mail = service([provider])
       await mail.watchAll()
       report('inbox')
       await vi.advanceTimersByTimeAsync(0)
-      expect(sync).toHaveBeenCalledTimes(1)
+      expect(inboxSyncs()).toBe(1)
       await vi.advanceTimersByTimeAsync(WATCH_RETRY_MS)
-      expect(sync).toHaveBeenCalledTimes(2)
+      expect(inboxSyncs()).toBe(2)
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('syncs every folder once in the background, so search finds mail everywhere', async () => {
+    const mail = service([new MockMailProvider()])
+    await mail.watchAll()
+    await vi.waitFor(async () =>
+      expect((await mail.listMessages(MOCK_ACCOUNT_ID, 'sent')).length).toBeGreaterThan(0),
+    )
+    const [sent] = await mail.listMessages(MOCK_ACCOUNT_ID, 'sent')
+    const word = sent!.subject.split(/\s+/).find((w) => w.length > 4)!
+    expect((await mail.search(MOCK_ACCOUNT_ID, word)).map((m) => m.id)).toContain(sent!.id)
+  })
+
+  it('creates folders and tells the UI', async () => {
+    const mail = service([new MockMailProvider()])
+    expect(await mail.createFolder(MOCK_ACCOUNT_ID, ' Projects ')).toBe('Projects')
+    expect((await mail.listFolders(MOCK_ACCOUNT_ID)).map((f) => f.name)).toContain('Projects')
+    expect(emitted).toContainEqual({ accountId: MOCK_ACCOUNT_ID })
+    await expect(mail.createFolder(MOCK_ACCOUNT_ID, '  ')).rejects.toThrow('needs a name')
   })
 
   it('reports no change when a sample folder is synced again unchanged', async () => {
@@ -213,6 +241,63 @@ describe('MailService', () => {
       (m) => m.id === unread.id,
     )
     expect(after?.isRead).toBe(false)
+  })
+
+  it('moves messages: they leave the list at once and show up in the target', async () => {
+    const provider = new MockMailProvider()
+    const mail = service([provider])
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+    const [first, second] = await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')
+    await mail.moveMessages(MOCK_ACCOUNT_ID, [first!.id], 'archive')
+    const inbox = await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')
+    expect(inbox.map((m) => m.id)).not.toContain(first!.id)
+    expect(inbox.map((m) => m.id)).toContain(second!.id)
+    await vi.waitFor(async () =>
+      expect((await mail.listMessages(MOCK_ACCOUNT_ID, 'archive')).map((m) => m.subject)).toContain(
+        first!.subject,
+      ),
+    )
+  })
+
+  it('puts messages back when the server refuses to move them', async () => {
+    const provider = new MockMailProvider()
+    vi.spyOn(provider, 'moveMessages').mockRejectedValue(new Error('No such folder'))
+    const mail = service([provider])
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+    const before = await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')
+    const opened = await mail.getMessage(MOCK_ACCOUNT_ID, before[0]!.id)
+    await expect(mail.moveMessages(MOCK_ACCOUNT_ID, [before[0]!.id], 'nowhere')).rejects.toThrow(
+      'No such folder',
+    )
+    expect(await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')).toEqual(before)
+    expect(await mail.getMessage(MOCK_ACCOUNT_ID, before[0]!.id)).toEqual(opened)
+  })
+
+  it('deletes messages for good', async () => {
+    const provider = new MockMailProvider()
+    const mail = service([provider])
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+    const [first] = await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')
+    await mail.deleteMessages(MOCK_ACCOUNT_ID, [first!.id])
+    expect((await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')).map((m) => m.id)).not.toContain(
+      first!.id,
+    )
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+    expect((await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')).map((m) => m.id)).not.toContain(
+      first!.id,
+    )
+  })
+
+  it('searches all synced folders of an account', async () => {
+    const mail = service([new MockMailProvider()])
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'sent')
+    const [message] = await mail.listMessages(MOCK_ACCOUNT_ID, 'sent')
+    const word = message!.subject.split(/\s+/).find((w) => w.length > 4)!
+    const results = await mail.search(MOCK_ACCOUNT_ID, word.toLowerCase())
+    expect(results.map((m) => m.id)).toContain(message!.id)
+    expect(results.find((m) => m.id === message!.id)?.folderId).toBe('sent')
+    expect(await mail.search(MOCK_ACCOUNT_ID, '   ')).toEqual([])
   })
 
   it('rejects unknown accounts with a clear error', async () => {

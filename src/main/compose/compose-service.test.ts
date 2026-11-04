@@ -64,6 +64,9 @@ function setup(
         : { saved: true as const, folderId: 'Sent' }
     }),
     setFlags: vi.fn(async () => undefined),
+    moveMessages: async () => undefined,
+    deleteMessages: async () => undefined,
+    createFolder: async (name: string) => name,
     watch: () => () => {},
     close: async () => undefined,
   }

@@ -6,24 +6,31 @@ import {
   Forward,
   ImageOff,
   Mail,
+  MailOpen,
   Paperclip,
   Reply,
   ReplyAll,
   Trash2,
 } from 'lucide-react'
-import type { Address, Attachment, Message } from '@shared/types/mail'
+import type { Address, Attachment, Folder, FolderId, Message } from '@shared/types/mail'
 import { errorMessage } from '../lib/errors'
 import { displayName, formatFileSize, formatFullDate } from '../lib/format'
 import { linkify, prepareHtml, splitQuotes } from '../lib/sanitize-html'
 import type { AsyncState } from '../lib/use-async'
 import { Avatar } from './Avatar'
+import { MoveMenu } from './MoveMenu'
 import { ToolbarButton } from './ToolbarButton'
 
 const api = window.api
 
-const ACTIONS_LATER = 'coming in M4'
-
 export type ReplyKind = 'reply' | 'replyAll' | 'forward'
+
+export type MessageAction =
+  | { type: 'archive' }
+  | { type: 'delete' }
+  | { type: 'move'; folderId: FolderId }
+  | { type: 'flag'; flagged: boolean }
+  | { type: 'read'; read: boolean }
 
 interface EmptyText {
   title: string
@@ -40,6 +47,8 @@ export function ReadingPane({
   empty = NO_SELECTION,
   onCompose,
   composeUnavailable,
+  onAction,
+  folders,
 }: {
   message: AsyncState<Message | null>
   /** What to say while nothing is shown. */
@@ -47,9 +56,17 @@ export function ReadingPane({
   onCompose: (kind: ReplyKind, message: Message) => void
   /** Why replying isn't possible for this account, e.g. in the sample mailbox. */
   composeUnavailable?: string
+  onAction: (action: MessageAction, message: Message) => void
+  /** Folders of the message's account, for Archive and Move. */
+  folders: Folder[]
 }) {
   const shown = message.status === 'ready' ? message.data : null
-  const replyUnavailable = composeUnavailable ?? (shown ? undefined : 'select a message first')
+  const noMessage = shown ? undefined : 'select a message first'
+  const replyUnavailable = composeUnavailable ?? noMessage
+  const archive = folders.find((f) => f.role === 'archive')
+  const archiveUnavailable =
+    noMessage ?? (archive && shown?.folderId === archive.id ? 'already in the archive' : undefined)
+  const act = (action: MessageAction) => shown && onAction(action, shown)
   const replyButton = (kind: ReplyKind, icon: typeof Reply, label: string) => (
     <ToolbarButton
       icon={icon}
@@ -65,9 +82,37 @@ export function ReadingPane({
         {replyButton('replyAll', ReplyAll, 'Reply all')}
         {replyButton('forward', Forward, 'Forward')}
         <div className="mx-2 h-5 w-px bg-line" />
-        <ToolbarButton icon={Archive} label="Archive" unavailableReason={ACTIONS_LATER} />
-        <ToolbarButton icon={Trash2} label="Delete" unavailableReason={ACTIONS_LATER} />
-        <ToolbarButton icon={Flag} label="Flag" unavailableReason={ACTIONS_LATER} />
+        <ToolbarButton
+          icon={Archive}
+          label={archive ? 'Archive' : 'Archive (creates an Archive folder)'}
+          unavailableReason={archiveUnavailable}
+          onClick={() => act({ type: 'archive' })}
+        />
+        <ToolbarButton
+          icon={Trash2}
+          label="Delete"
+          unavailableReason={noMessage}
+          onClick={() => act({ type: 'delete' })}
+        />
+        <MoveMenu
+          folders={folders.filter((f) => f.id !== shown?.folderId)}
+          unavailableReason={noMessage}
+          onMove={(folderId) => act({ type: 'move', folderId })}
+        />
+        <div className="mx-2 h-5 w-px bg-line" />
+        <ToolbarButton
+          icon={Flag}
+          label={shown?.isFlagged ? 'Remove flag' : 'Flag'}
+          pressed={shown ? shown.isFlagged : undefined}
+          unavailableReason={noMessage}
+          onClick={() => act({ type: 'flag', flagged: !shown?.isFlagged })}
+        />
+        <ToolbarButton
+          icon={shown && !shown.isRead ? MailOpen : Mail}
+          label={shown && !shown.isRead ? 'Mark as read' : 'Mark as unread'}
+          unavailableReason={noMessage}
+          onClick={() => act({ type: 'read', read: !shown?.isRead })}
+        />
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col">

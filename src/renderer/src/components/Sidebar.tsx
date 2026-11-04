@@ -30,7 +30,7 @@ export interface FolderSelection {
   folderId: FolderId
 }
 
-const FOLDER_ICONS: Record<FolderRole, LucideIcon> = {
+export const FOLDER_ICONS: Record<FolderRole, LucideIcon> = {
   inbox: Inbox,
   drafts: FilePen,
   sent: Send,

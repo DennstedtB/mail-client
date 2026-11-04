@@ -1,6 +1,7 @@
 import type { MailApi } from '@shared/ipc-contract'
 import type {
   AccountId,
+  FlagChange,
   Folder,
   FolderId,
   MailChange,
@@ -11,7 +12,7 @@ import type {
 import type { MailProviderSource } from '../accounts/account-service'
 import type { CachedBody, CachedRow, MailCache } from '../cache/mail-cache'
 import { decodeMessageId, encodeMessageId, type MessageRef } from '../mail/message-ref'
-import type { FlagChange, MailProvider } from '../providers/types'
+import type { MailProvider } from '../providers/types'
 import type { AttachmentFiles } from './attachment-files'
 
 /** Bodies of the newest messages are downloaded in the background, so they open at once. */
@@ -24,6 +25,8 @@ interface RunningSync {
   promise: Promise<void>
   /** Someone asked again while it ran; changes may have arrived after it looked. */
   again: boolean
+  /** Download the newest bodies afterwards (not for background syncs of all folders). */
+  prefetch: boolean
 }
 
 export interface MailServiceDeps {
@@ -75,19 +78,25 @@ export class MailService implements MailApi {
    * joins it, and the folder is synced once more afterwards, so nothing that
    * arrived in between is missed.
    */
-  syncFolder(accountId: AccountId, folderId: FolderId): Promise<void> {
+  syncFolder(
+    accountId: AccountId,
+    folderId: FolderId,
+    options: { prefetch?: boolean } = {},
+  ): Promise<void> {
+    const prefetch = options.prefetch ?? true
     const key = JSON.stringify([accountId, folderId])
     const running = this.syncs.get(key)
     if (running) {
       running.again = true
+      running.prefetch ||= prefetch
       return running.promise
     }
-    const entry: RunningSync = { promise: Promise.resolve(), again: false }
+    const entry: RunningSync = { promise: Promise.resolve(), again: false, prefetch }
     entry.promise = (async () => {
       try {
         do {
           entry.again = false
-          await this.runSync(accountId, folderId)
+          await this.runSync(accountId, folderId, entry.prefetch)
         } while (entry.again)
       } finally {
         this.syncs.delete(key)
@@ -97,11 +106,11 @@ export class MailService implements MailApi {
     return entry.promise
   }
 
-  private async runSync(accountId: AccountId, folderId: FolderId) {
+  private async runSync(accountId: AccountId, folderId: FolderId, prefetch: boolean) {
     const provider = await this.provider(accountId)
     const changed = await provider.syncFolder(folderId, this.deps.cache)
     if (changed) this.deps.emit({ accountId, folderId })
-    void this.prefetch(provider, folderId)
+    if (prefetch) void this.prefetch(provider, folderId)
   }
 
   private async prefetch(provider: MailProvider, folderId: FolderId) {
@@ -194,11 +203,7 @@ export class MailService implements MailApi {
    */
   async setFlags(accountId: AccountId, messageIds: MessageId[], change: FlagChange) {
     const provider = await this.provider(accountId)
-    const byFolder = new Map<FolderId, number[]>()
-    for (const ref of messageIds.map(decodeMessageId)) {
-      byFolder.set(ref.folderId, [...(byFolder.get(ref.folderId) ?? []), ref.uid])
-    }
-    for (const [folderId, uids] of byFolder) {
+    for (const [folderId, uids] of byFolder(messageIds)) {
       const updated = uids.flatMap((uid) => {
         const row = this.deps.cache.getMessage(accountId, folderId, uid)
         if (!row) return []
@@ -225,6 +230,61 @@ export class MailService implements MailApi {
     }
   }
 
+  /**
+   * Moves messages. They leave the list at once; if the server refuses,
+   * they are put back and the error is passed on.
+   */
+  async moveMessages(accountId: AccountId, messageIds: MessageId[], targetFolderId: FolderId) {
+    const provider = await this.provider(accountId)
+    await this.removeFromFolders(accountId, messageIds, targetFolderId, (folderId, uids) =>
+      provider.moveMessages(folderId, uids, targetFolderId),
+    )
+    void this.syncFolder(accountId, targetFolderId).catch(() => undefined)
+  }
+
+  async deleteMessages(accountId: AccountId, messageIds: MessageId[]) {
+    const provider = await this.provider(accountId)
+    await this.removeFromFolders(accountId, messageIds, null, (folderId, uids) =>
+      provider.deleteMessages(folderId, uids),
+    )
+  }
+
+  private async removeFromFolders(
+    accountId: AccountId,
+    messageIds: MessageId[],
+    skipFolder: FolderId | null,
+    onServer: (folderId: FolderId, uids: number[]) => Promise<void>,
+  ) {
+    for (const [folderId, uids] of byFolder(messageIds)) {
+      if (folderId === skipFolder) continue
+      const removed = this.deps.cache.snapshot(accountId, folderId, uids)
+      this.deps.cache.removeMessages(accountId, folderId, uids)
+      this.deps.emit({ accountId, folderId })
+      try {
+        await onServer(folderId, uids)
+      } catch (error) {
+        this.deps.cache.restore(accountId, folderId, removed)
+        this.deps.emit({ accountId, folderId })
+        throw error
+      }
+      // Again, so the folder counts (from the server) catch up.
+      this.deps.emit({ accountId, folderId })
+    }
+  }
+
+  async createFolder(accountId: AccountId, name: string): Promise<FolderId> {
+    const trimmed = name.trim()
+    if (!trimmed) throw new Error('A folder needs a name.')
+    const folderId = await (await this.provider(accountId)).createFolder(trimmed)
+    this.deps.emit({ accountId })
+    return folderId
+  }
+
+  async search(accountId: AccountId, query: string): Promise<MessageSummary[]> {
+    await this.provider(accountId)
+    return this.deps.cache.search(accountId, query).map((row) => toSummary(accountId, row))
+  }
+
   /** Starts watching every account that isn't watched yet (new mail → sync → UI update). */
   async watchAll() {
     for (const provider of await this.deps.source.mailProviders()) {
@@ -234,6 +294,28 @@ export class MailService implements MailApi {
         accountId,
         provider.watch((folderId) => this.syncForWatcher(accountId, folderId)),
       )
+      void this.syncAllFolders(provider)
+    }
+  }
+
+  /**
+   * Syncs every folder once in the background, so search covers all of them,
+   * not only the folders opened so far. Bodies are downloaded only for
+   * folders that are opened (and the inbox, which the watcher keeps current).
+   */
+  private async syncAllFolders(provider: MailProvider) {
+    const accountId = provider.account.id
+    let folders: Folder[]
+    try {
+      folders = await provider.listFolders()
+    } catch {
+      return
+    }
+    for (const folder of folders) {
+      // Stop if the account was removed meanwhile.
+      if (!this.watchers.has(accountId)) return
+      if (folder.role === 'inbox') continue
+      await this.syncFolder(accountId, folder.id, { prefetch: false }).catch(() => undefined)
     }
   }
 
@@ -270,4 +352,13 @@ export class MailService implements MailApi {
   private provider(accountId: AccountId): Promise<MailProvider> {
     return this.deps.source.provider(accountId)
   }
+}
+
+/** Groups message ids by folder, keeping the order of first appearance. */
+function byFolder(messageIds: MessageId[]): Map<FolderId, number[]> {
+  const groups = new Map<FolderId, number[]>()
+  for (const ref of messageIds.map(decodeMessageId)) {
+    groups.set(ref.folderId, [...(groups.get(ref.folderId) ?? []), ref.uid])
+  }
+  return groups
 }

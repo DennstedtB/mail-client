@@ -143,5 +143,32 @@ describe.runIf(password)('local test server', () => {
         flagged: true,
       })
     }, 30_000)
+
+    it('moves a message to the trash and deletes it there', async () => {
+      const subject = `Live move ${Date.now()}`
+      await sendToSelf(subject)
+      const find = (folder: string) =>
+        cache.listMessages(account.id, folder).find((m) => m.subject === subject)
+      await expect
+        .poll(
+          async () => {
+            await provider.syncFolder('INBOX', cache)
+            return find('INBOX') !== undefined
+          },
+          { timeout: 15_000, interval: 1000 },
+        )
+        .toBe(true)
+      const trash = (await provider.listFolders()).find((f) => f.role === 'trash')!.id
+
+      await provider.moveMessages('INBOX', [find('INBOX')!.uid], trash)
+      await provider.syncFolder('INBOX', cache)
+      await provider.syncFolder(trash, cache)
+      expect(find('INBOX')).toBeUndefined()
+      expect(find(trash)).toBeDefined()
+
+      await provider.deleteMessages(trash, [find(trash)!.uid])
+      await provider.syncFolder(trash, cache)
+      expect(find(trash)).toBeUndefined()
+    }, 30_000)
   })
 })

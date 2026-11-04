@@ -77,4 +77,34 @@ describe('toFolders', () => {
     const folders = toFolders('acc', [mailbox('Projects/beta'), mailbox('Projects/Alpha')])
     expect(folders.map((f) => f.name)).toEqual(['Projects / Alpha', 'Projects / beta'])
   })
+
+  it('recognizes well-known folders by name when the server has no flags for them', () => {
+    const folders = toFolders('acc', [
+      mailbox('INBOX', '\\Inbox'),
+      mailbox('Archive'),
+      mailbox('Papierkorb'),
+      mailbox('Projects/Sent'),
+      mailbox('Sent Items', '\\Sent'),
+      mailbox('Sent'),
+    ])
+    expect(folders.map((f) => `${f.role}:${f.name}`)).toEqual([
+      'inbox:Inbox',
+      'sent:Sent Items',
+      'archive:Archive',
+      'trash:Papierkorb',
+      'custom:Projects / Sent',
+      'custom:Sent',
+    ])
+  })
+
+  it('looks below INBOX on servers with an INBOX. namespace', () => {
+    const dotted = (path: string, use?: string) =>
+      ({ ...mailbox(path, use), delimiter: '.' }) as ListResponse
+    const folders = toFolders('acc', [
+      dotted('INBOX', '\\Inbox'),
+      dotted('INBOX.Archives'),
+      dotted('INBOX.Trash'),
+    ])
+    expect(folders.map((f) => f.role)).toEqual(['inbox', 'archive', 'trash'])
+  })
 })

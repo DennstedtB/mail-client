@@ -56,13 +56,15 @@ What works now:
 - adding an IMAP/SMTP account: MailClient checks both servers first and keeps the password in the macOS Keychain
 - reading your mail: HTML messages are shown safely with remote images blocked, attachments open or save, new mail arrives by push
 - writing: new messages, reply, reply all and forward, with attachments; a copy goes to Sent
+- sorting mail: read and unread, flag, archive, move to any folder, delete (the Delete key works too)
+- searching subject, people and message text in all folders
 - arrow keys in the message list, light and dark mode
 
 What comes next:
-- M4: mark as read or unread, flag, move, delete and search
 - M5: the calendar
+- M6: Microsoft 365 accounts
 
-Writing needs your own account: the sample mailbox can't send.
+Try flagging or moving this message: the sample mailbox does everything except send.
 
 Use "Add account" in the sidebar to get started. While developing, the dialog can fill in the local test server for you.`,
   },

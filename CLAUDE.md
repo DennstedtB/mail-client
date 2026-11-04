@@ -31,19 +31,19 @@ Data flow: UI → `window.api.mail.listMessages()` → preload → `ipcRenderer.
 
 Main-process modules:
 
-| Path                                    | Responsibility                                                                                                                                                    |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/main/accounts/account-service.ts`  | Adds, lists, removes accounts; owns one provider per account; sample mailbox while none exists                                                                    |
-| `src/main/accounts/account-store.ts`    | Account settings in `accounts.json` (no passwords)                                                                                                                |
-| `src/main/accounts/secret-store.ts`     | Passwords in `credentials.json`, encrypted with `safeStorage` (Keychain key)                                                                                      |
-| `src/main/providers/imap-smtp/`         | ImapFlow / Nodemailer: connection options, connection check, readable errors, folders, folder sync, persistent connection + IDLE watcher, send + Sent copy, flags |
-| `src/main/cache/mail-cache.ts`          | Local cache (`node:sqlite`, built into Electron): envelopes, flags, bodies, FTS5 search index. Rebuilt when the schema version changes                            |
-| `src/main/mail/`                        | Message ids (`message-ref.ts`: folder + UID, opaque to the UI), parsing with mailparser (`parse-message.ts`)                                                      |
-| `src/main/services/mail-service.ts`     | Mail part of the contract: lists from the cache, sync, body download and prefetch, watchers per account                                                           |
-| `src/main/services/attachment-files.ts` | Opening (temp folder, never files that run code) and saving attachments                                                                                           |
-| `src/main/compose/`                     | Drafts for new / reply / forward (`drafts.ts`), attachment tokens, building the MIME message (Nodemailer MailComposer), sending                                   |
-| `src/main/providers/mock/`              | Sample mailbox                                                                                                                                                    |
-| `src/main/storage/json-file.ts`         | Atomic JSON writes (0600), write queue                                                                                                                            |
+| Path                                    | Responsibility                                                                                                                                                                                                       |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/main/accounts/account-service.ts`  | Adds, lists, removes accounts; owns one provider per account; sample mailbox while none exists                                                                                                                       |
+| `src/main/accounts/account-store.ts`    | Account settings in `accounts.json` (no passwords)                                                                                                                                                                   |
+| `src/main/accounts/secret-store.ts`     | Passwords in `credentials.json`, encrypted with `safeStorage` (Keychain key)                                                                                                                                         |
+| `src/main/providers/imap-smtp/`         | ImapFlow / Nodemailer: connection options, connection check, readable errors, folders (roles by SPECIAL-USE, else by name), folder sync, persistent connection + IDLE watcher, send + Sent copy, flags, move, delete |
+| `src/main/cache/mail-cache.ts`          | Local cache (`node:sqlite`, built into Electron): envelopes, flags, bodies, FTS5 search index. Rebuilt when the schema version changes                                                                               |
+| `src/main/mail/`                        | Message ids (`message-ref.ts`: folder + UID, opaque to the UI), parsing with mailparser (`parse-message.ts`)                                                                                                         |
+| `src/main/services/mail-service.ts`     | Mail part of the contract: lists from the cache, sync, body download and prefetch, watchers per account, flags / move / delete, search                                                                               |
+| `src/main/services/attachment-files.ts` | Opening (temp folder, never files that run code) and saving attachments                                                                                                                                              |
+| `src/main/compose/`                     | Drafts for new / reply / forward (`drafts.ts`), attachment tokens, building the MIME message (Nodemailer MailComposer), sending                                                                                      |
+| `src/main/providers/mock/`              | Sample mailbox                                                                                                                                                                                                       |
+| `src/main/storage/json-file.ts`         | Atomic JSON writes (0600), write queue                                                                                                                                                                               |
 
 Data lives in `app.getPath('userData')`, on macOS `~/Library/Application Support/MailClient`.
 
@@ -52,7 +52,7 @@ Data lives in `app.getPath('userData')`, on macOS `~/Library/Application Support
 1. **The IPC contract is the only seam.** `src/shared/ipc-contract.ts` defines `Api`. To add a capability, add it to the interface and to `API_METHODS`; the type check fails until both match. The UI never imports from `src/main/`, and never uses `ipcRenderer` directly.
 2. **Everything crossing the contract is JSON-serializable.** No `Date`, `Map`, `Buffer` or class instances; dates are ISO 8601 strings. This keeps a later backend swap (e.g. Tauri) possible.
 3. **Protocols live behind providers.** `MailProvider` / `CalendarProvider` in `src/main/providers/types.ts`. Services and UI never import ImapFlow, Nodemailer, tsdav or Graph clients. Microsoft 365 (M6) is another provider, not a special case.
-4. **Local-first.** The UI reads from the local SQLite cache; providers fill it (`syncFolder`). Folders are synced read-only (EXAMINE), so syncing and downloading never mark mail as read. A first sync takes the newest 300 messages; later syncs fetch new UIDs and update flags and deletions.
+4. **Local-first.** The UI reads from the local SQLite cache; providers fill it (`syncFolder`). Actions (flags, move, delete) change the cache first and emit a `MailChange`, then the server; if the server refuses, the cache is put back (`snapshot` / `restore`) and the error goes to the UI. Folders are synced read-only (EXAMINE), so syncing and downloading never mark mail as read. A first sync takes the newest 300 messages; later syncs fetch new UIDs and update flags and deletions. At startup every folder is synced once in the background (without bodies), so search covers all folders.
 5. **Events flow one way.** Requests go UI → main through the contract; `MailChange` events go main → UI through `window.api.events`. The UI never polls.
 6. **Multiple accounts are part of the model.** The UI shows one account in v1, but every call carries an `accountId`.
 
@@ -99,7 +99,7 @@ In use: ImapFlow 2 (IMAP), Nodemailer 10 (SMTP, MailComposer, addressparser), ma
 - [x] **M1 Account setup:** manual IMAP/SMTP configuration, connection check with readable errors, password in the Keychain, real folders with unread counts, one sidebar section per account, remove account
 - [x] **M2 Reading mail:** local cache, folder sync, message list and view, safe HTML rendering, attachments (open / save), push for new mail (IMAP IDLE)
 - [x] **M3 Writing mail:** compose, reply / forward, attachments, send, save to Sent
-- [ ] **M4 Mail actions:** read / unread, flag, move, delete, local search
+- [x] **M4 Mail actions:** read / unread, flag, move, delete, local search
 - [ ] **M5 Calendar:** CalDAV, day / week / month views, create / edit / delete events, show recurring events
 - [ ] **M6 Microsoft 365:** Entra app registration, MSAL sign-in, Graph mail and calendar providers
 - Later: multiple accounts and unified inbox, meeting invitations, editing recurring events, contacts, notifications, full-text search, signing and auto-update, Windows / Linux
