@@ -1,5 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
-import { Flag, Paperclip, Search } from 'lucide-react'
+import { Flag, LoaderCircle, Paperclip, Reply, RotateCw, Search } from 'lucide-react'
 import type { Folder, MessageId, MessageSummary } from '@shared/types/mail'
 import { cn } from '../lib/cn'
 import { displayName, formatListDate } from '../lib/format'
@@ -12,9 +12,13 @@ interface MessageListProps {
   onSelect: (id: MessageId) => void
   /** Reference date for relative dates ("Yesterday"); changes at midnight. */
   today: Date
-  /** Shown instead of messages when the list has nothing to load, e.g. a feature still to come. */
-  note?: string
+  /** State of the sync with the server; the list itself always comes from the cache. */
+  sync: SyncState
+  onRefresh: () => void
 }
+
+export type SyncState =
+  { status: 'running' } | { status: 'done' } | { status: 'error'; message: string }
 
 const optionId = (id: MessageId) => `message-${id}`
 
@@ -24,7 +28,8 @@ export function MessageList({
   selectedId,
   onSelect,
   today,
-  note,
+  sync,
+  onRefresh,
 }: MessageListProps) {
   const listRef = useRef<HTMLUListElement>(null)
   const items = messages.status === 'ready' ? messages.data : []
@@ -54,10 +59,40 @@ export function MessageList({
       aria-label="Message list"
       className="flex w-[360px] shrink-0 flex-col border-r border-line bg-surface"
     >
-      <header className="drag-region flex h-[52px] shrink-0 flex-col justify-center px-4">
-        <h1 className="text-[15px] leading-tight font-semibold">{folder?.name ?? ' '}</h1>
-        <p className="text-[11px] leading-tight text-ink-muted">{folderSummary(folder)}</p>
+      <header className="drag-region flex h-[52px] shrink-0 items-center gap-2 pr-2 pl-4">
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-[15px] leading-tight font-semibold">
+            {folder?.name ?? ' '}
+          </h1>
+          <p className="text-[11px] leading-tight text-ink-muted">
+            {sync.status === 'running' ? 'Checking for new mail…' : folderSummary(folder)}
+          </p>
+        </div>
+        {folder && (
+          <button
+            type="button"
+            onClick={onRefresh}
+            aria-label="Check for new mail"
+            title="Check for new mail"
+            aria-disabled={sync.status === 'running' || undefined}
+            className="no-drag grid size-8 place-items-center rounded-md text-ink-muted hover:bg-ink/6 hover:text-ink"
+          >
+            {sync.status === 'running' ? (
+              <LoaderCircle className="size-4 animate-spin" aria-hidden />
+            ) : (
+              <RotateCw className="size-4" strokeWidth={1.75} aria-hidden />
+            )}
+          </button>
+        )}
       </header>
+      {sync.status === 'error' && (
+        <p
+          role="status"
+          className="mx-3 mb-2 rounded-md bg-danger/8 px-2.5 py-1.5 text-[11.5px] text-danger"
+        >
+          Couldn't check for new mail: {sync.message}
+        </p>
+      )}
 
       <div className="px-3 pb-2">
         <label
@@ -75,11 +110,14 @@ export function MessageList({
         </label>
       </div>
 
-      {messages.status === 'idle' && note && <ListNote>{note}</ListNote>}
       {messages.status === 'loading' && <ListNote>Loading messages…</ListNote>}
       {messages.status === 'error' && <ListNote>{messages.message}</ListNote>}
       {messages.status === 'ready' && items.length === 0 && (
-        <ListNote>No messages in {folder?.name ?? 'this folder'}.</ListNote>
+        <ListNote>
+          {sync.status === 'running'
+            ? 'Loading messages from the server…'
+            : `No messages in ${folder?.name ?? 'this folder'}.`}
+        </ListNote>
       )}
 
       {items.length > 0 && (
@@ -154,6 +192,13 @@ function MessageRow({
         >
           {displayName(message.from)}
         </span>
+        {message.isAnswered && (
+          <Reply
+            className="size-3 shrink-0 self-center opacity-60"
+            strokeWidth={2}
+            aria-label="Replied"
+          />
+        )}
         {message.hasAttachments && (
           <Paperclip
             className="size-3 shrink-0 self-center opacity-60"

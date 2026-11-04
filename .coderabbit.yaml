@@ -1,5 +1,8 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 reviews:
+  auto_review:
+    # Also review stacked pull requests (M3 on top of M2, …), not only those into main.
+    base_branches: ['.*']
   pre_merge_checks:
     docstrings:
       # TypeScript types document the code; a coverage target only produces boilerplate comments.

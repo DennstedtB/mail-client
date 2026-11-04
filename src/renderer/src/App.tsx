@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Account, MessageId, MessageSummary } from '@shared/types/mail'
 import { AddAccountDialog } from './components/AddAccountDialog'
 import { CalendarPlaceholder } from './components/CalendarPlaceholder'
-import { MessageList } from './components/MessageList'
+import { MessageList, type SyncState } from './components/MessageList'
 import { ReadingPane } from './components/ReadingPane'
 import { RemoveAccountDialog } from './components/RemoveAccountDialog'
 import { Sidebar, type AccountFolders, type FolderSelection, type View } from './components/Sidebar'
@@ -12,10 +12,6 @@ import { useToday } from './lib/use-today'
 
 const api = window.api
 
-/** Reading messages from real accounts comes with the local cache in M2. */
-const MESSAGES_LATER =
-  'Reading messages arrives in M2. The folders on the left come from your server.'
-
 export function App() {
   const [view, setView] = useState<View>('mail')
   const [chosen, setChosen] = useState<
@@ -23,17 +19,24 @@ export function App() {
   >(null)
   const [selectedMessageId, setSelectedMessageId] = useState<MessageId | null>(null)
   const [accountsVersion, setAccountsVersion] = useState(0)
+  const [mailVersion, setMailVersion] = useState(0)
+  const [syncRequest, setSyncRequest] = useState(0)
+  const [syncResult, setSyncResult] = useState<{ key: string; state: SyncState } | null>(null)
   const [adding, setAdding] = useState(false)
   const [removing, setRemoving] = useState<Account | null>(null)
   const today = useToday()
 
+  // The main process announces every change to cached mail: syncs, new mail via IDLE.
+  useEffect(() => api.events.onMailChanged(() => setMailVersion((v) => v + 1)), [])
+
   const appInfo = useAsync('app-info', () => api.app.getInfo())
   const accounts = useAsync(`accounts:${accountsVersion}`, () => api.accounts.list())
   const accountList = accounts.status === 'ready' ? accounts.data : null
+  const accountIds = accountList?.map((a) => a.id).join(',')
 
   // Folders of all accounts, loaded side by side. One failing account doesn't hide the others.
   const folders = useAsync(
-    accountList ? `folders:${accountsVersion}:${accountList.map((a) => a.id).join(',')}` : null,
+    accountList ? `folders:${accountsVersion}:${accountIds}:${mailVersion}` : null,
     () =>
       Promise.all(
         (accountList ?? []).map(async (account): Promise<AccountFolders> => {
@@ -48,11 +51,11 @@ export function App() {
           }
         }),
       ),
+    `folders:${accountIds}`,
   )
 
   // Selected folder: the one the user chose, otherwise the inbox of the chosen (or first) account.
   const selection = resolveSelection(chosen, accountList, folders)
-  const account = accountList?.find((a) => a.id === selection?.accountId)
   const accountFolders =
     folders.status === 'ready'
       ? folders.data.find((f) => f.accountId === selection?.accountId)
@@ -61,18 +64,40 @@ export function App() {
     accountFolders?.status === 'ready'
       ? accountFolders.folders.find((f) => f.id === selection?.folderId)
       : undefined
+  const folderAccountId = folder?.accountId
+  const folderId = folder?.id
 
-  const showsMessages = account?.kind === 'mock'
+  // Ask the server for news whenever a folder is shown, and on "Check for new mail".
+  // The list itself comes from the cache and is there at once.
+  const syncKey = folderId ? `${folderAccountId}:${folderId}:${syncRequest}` : null
+  useEffect(() => {
+    if (!folderAccountId || !folderId || !syncKey) return
+    let current = true
+    api.mail.syncFolder(folderAccountId, folderId).then(
+      () => current && setSyncResult({ key: syncKey, state: { status: 'done' } }),
+      (error: unknown) =>
+        current &&
+        setSyncResult({ key: syncKey, state: { status: 'error', message: errorMessage(error) } }),
+    )
+    return () => {
+      current = false
+    }
+  }, [folderAccountId, folderId, syncKey])
+  const sync: SyncState =
+    syncResult && syncResult.key === syncKey ? syncResult.state : { status: 'running' }
+
   const messages = useAsync(
-    showsMessages && folder ? `messages:${folder.accountId}:${folder.id}` : null,
+    folder ? `messages:${folder.accountId}:${folder.id}:${mailVersion}` : null,
     () => api.mail.listMessages(folder!.accountId, folder!.id),
+    folder ? `messages:${folder.accountId}:${folder.id}` : undefined,
   )
   const messageInList =
     messages.status === 'ready' && messages.data.some((m) => m.id === selectedMessageId)
   const openMessageId = messageInList ? selectedMessageId : null
   const message = useAsync(
-    folder && openMessageId ? `message:${folder.accountId}:${openMessageId}` : null,
+    folder && openMessageId ? `message:${folder.accountId}:${openMessageId}:${mailVersion}` : null,
     () => api.mail.getMessage(folder!.accountId, openMessageId!),
+    openMessageId ? `message:${openMessageId}` : undefined,
   )
 
   const listState: AsyncState<MessageSummary[]> =
@@ -105,16 +130,10 @@ export function App() {
             selectedId={openMessageId}
             onSelect={setSelectedMessageId}
             today={today}
-            note={account && !showsMessages && folder ? MESSAGES_LATER : undefined}
+            sync={sync}
+            onRefresh={() => setSyncRequest((n) => n + 1)}
           />
-          <ReadingPane
-            message={message}
-            empty={
-              account && !showsMessages
-                ? { title: 'No messages yet', hint: 'Reading mail from your server arrives in M2.' }
-                : undefined
-            }
-          />
+          <ReadingPane message={message} />
         </>
       ) : (
         <CalendarPlaceholder now={today} />

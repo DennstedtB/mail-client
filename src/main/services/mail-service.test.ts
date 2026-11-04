@@ -1,84 +1,160 @@
-import { describe, expect, it } from 'vitest'
-import type { Account, Folder, Message, MessageSummary } from '@shared/types/mail'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { MailChange } from '@shared/types/mail'
+import { MailCache } from '../cache/mail-cache'
 import type { MailProvider } from '../providers/types'
+import { MOCK_ACCOUNT_ID, MockMailProvider } from '../providers/mock/mock-mail-provider'
+import type { AttachmentFiles } from './attachment-files'
 import { MailService } from './mail-service'
 
-/** Minimal provider whose every answer is tagged with its account id. */
-class TaggedProvider implements MailProvider {
-  readonly account: Account
+let cache: MailCache
+let emitted: MailChange[]
+let files: AttachmentFiles & { open: ReturnType<typeof vi.fn>; save: ReturnType<typeof vi.fn> }
 
-  constructor(id: string) {
-    this.account = { id, name: id, senderName: id, email: `${id}@example.org`, kind: 'mock' }
-  }
-
-  async listFolders(): Promise<Folder[]> {
-    const accountId = this.account.id
-    return [
-      {
-        id: 'inbox',
-        accountId,
-        name: `${accountId} inbox`,
-        role: 'inbox',
-        unreadCount: 0,
-        totalCount: 1,
+function service(providers: MailProvider[]) {
+  return new MailService({
+    source: {
+      mailProviders: async () => providers,
+      provider: async (id) => {
+        const provider = providers.find((p) => p.account.id === id)
+        if (!provider) throw new Error(`Unknown account: ${id}`)
+        return provider
       },
-    ]
-  }
-
-  async listMessages(folderId: string): Promise<MessageSummary[]> {
-    return [this.message(`${this.account.id}:${folderId}:1`, folderId)]
-  }
-
-  async getMessage(messageId: string): Promise<Message | null> {
-    return { ...this.message(messageId, 'inbox'), to: [], cc: [], bodyText: '', attachments: [] }
-  }
-
-  private message(id: string, folderId: string): MessageSummary {
-    return {
-      id,
-      accountId: this.account.id,
-      folderId,
-      from: { email: 'someone@example.org' },
-      subject: '',
-      preview: '',
-      date: '2026-11-03T09:00:00.000Z',
-      isRead: true,
-      isFlagged: false,
-      hasAttachments: false,
-    }
-  }
+    },
+    cache,
+    emit: (change) => emitted.push(change),
+    files,
+  })
 }
 
+beforeEach(() => {
+  cache = new MailCache(':memory:')
+  emitted = []
+  files = { open: vi.fn(async () => undefined), save: vi.fn(async () => true) }
+})
+afterEach(() => cache.close())
+
 describe('MailService', () => {
-  const providers = [new TaggedProvider('work'), new TaggedProvider('private')]
-  const service = new MailService({
-    mailProviders: async () => providers,
-    provider: async (id) => {
-      const provider = providers.find((p) => p.account.id === id)
-      if (!provider) throw new Error(`Unknown account: ${id}`)
-      return provider
-    },
+  it('lists messages from the cache once a folder was synced, and tells the UI', async () => {
+    const mail = service([new MockMailProvider()])
+    expect(await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')).toEqual([])
+
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+    const messages = await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')
+    expect(messages.length).toBeGreaterThan(0)
+    expect(messages.every((m) => m.folderId === 'inbox' && m.accountId === MOCK_ACCOUNT_ID)).toBe(
+      true,
+    )
+    expect(emitted).toContainEqual({ accountId: MOCK_ACCOUNT_ID, folderId: 'inbox' })
   })
 
-  it('routes listFolders to the provider of the requested account', async () => {
-    expect((await service.listFolders('private'))[0]?.name).toBe('private inbox')
-    expect((await service.listFolders('work'))[0]?.name).toBe('work inbox')
+  it('joins a sync that is already running instead of starting another', async () => {
+    const provider = new MockMailProvider()
+    const sync = vi.spyOn(provider, 'syncFolder')
+    const mail = service([provider])
+    await Promise.all([
+      mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox'),
+      mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox'),
+    ])
+    expect(sync).toHaveBeenCalledTimes(1)
   })
 
-  it('routes listMessages to the provider of the requested account', async () => {
-    const [first] = await service.listMessages('private', 'inbox')
-    expect(first?.accountId).toBe('private')
-    expect(first?.id).toBe('private:inbox:1')
+  it('returns full messages with recipients and attachments', async () => {
+    const mail = service([new MockMailProvider()])
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+    const summary = (await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')).find(
+      (m) => m.hasAttachments,
+    )!
+    const message = await mail.getMessage(MOCK_ACCOUNT_ID, summary.id)
+    expect(message?.bodyText.length).toBeGreaterThan(0)
+    expect(message?.to.length).toBeGreaterThan(0)
+    expect(message?.attachments.length).toBeGreaterThan(0)
   })
 
-  it('routes getMessage to the provider of the requested account', async () => {
-    const message = await service.getMessage('work', 'm-1')
-    expect(message?.accountId).toBe('work')
+  it('downloads a body on first open when it is not cached yet', async () => {
+    const provider = new MockMailProvider()
+    const mail = service([provider])
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+    const [first] = await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')
+    cache.resetFolder(MOCK_ACCOUNT_ID, 'inbox')
+    await provider.syncFolder('inbox', cache) // envelopes and bodies again
+    cache.setBody(MOCK_ACCOUNT_ID, 'inbox', 1, {
+      text: '',
+      attachments: [],
+      headers: { references: [] },
+      preview: '',
+      to: [],
+      cc: [],
+    })
+    const fetch = vi.spyOn(provider, 'fetchMessage')
+    await mail.getMessage(MOCK_ACCOUNT_ID, first!.id)
+    expect(fetch).not.toHaveBeenCalled() // cached
+
+    cache.removeMessages(MOCK_ACCOUNT_ID, 'inbox', [1])
+    await provider.syncFolder('inbox', cache)
+    expect(await mail.getMessage(MOCK_ACCOUNT_ID, 'not-an-id').catch((e: Error) => e.message)).toBe(
+      'Unknown message.',
+    )
+  })
+
+  it('returns null for a message that is no longer cached', async () => {
+    const mail = service([new MockMailProvider()])
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+    const [first] = await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')
+    cache.resetFolder(MOCK_ACCOUNT_ID, 'inbox')
+    await expect(mail.getMessage(MOCK_ACCOUNT_ID, first!.id)).resolves.toBeNull()
+  })
+
+  it('hands attachments to the file helper for opening and saving', async () => {
+    const mail = service([new MockMailProvider()])
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+    const summary = (await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')).find(
+      (m) => m.hasAttachments,
+    )!
+    const message = await mail.getMessage(MOCK_ACCOUNT_ID, summary.id)
+    const attachmentId = message!.attachments[0]!.id
+
+    await mail.openAttachment(MOCK_ACCOUNT_ID, summary.id, attachmentId)
+    await expect(mail.saveAttachment(MOCK_ACCOUNT_ID, summary.id, attachmentId)).resolves.toBe(true)
+    expect(files.open).toHaveBeenCalledWith(
+      expect.objectContaining({ filename: message!.attachments[0]!.filename }),
+    )
+    expect(files.save).toHaveBeenCalledTimes(1)
+  })
+
+  it('watches each account once, and stops and forgets a removed one', async () => {
+    const provider = new MockMailProvider()
+    const stop = vi.fn()
+    const watch = vi.spyOn(provider, 'watch').mockReturnValue(stop)
+    const mail = service([provider])
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+
+    await mail.watchAll()
+    await mail.watchAll()
+    expect(watch).toHaveBeenCalledTimes(1)
+
+    mail.forget(MOCK_ACCOUNT_ID)
+    expect(stop).toHaveBeenCalled()
+    expect(await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')).toEqual([])
+  })
+
+  it('syncs a folder when its watcher reports a change', async () => {
+    const provider = new MockMailProvider()
+    let report: ((folder: string) => void) | undefined
+    vi.spyOn(provider, 'watch').mockImplementation((onChange) => {
+      report = onChange
+      return () => {}
+    })
+    const mail = service([provider])
+    await mail.watchAll()
+    report!('inbox')
+    await vi.waitFor(async () =>
+      expect((await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')).length).toBeGreaterThan(0),
+    )
   })
 
   it('rejects unknown accounts with a clear error', async () => {
-    await expect(service.listFolders('nope')).rejects.toThrow('Unknown account: nope')
-    await expect(service.listMessages('nope', 'inbox')).rejects.toThrow('Unknown account: nope')
-    await expect(service.getMessage('nope', 'm-1')).rejects.toThrow('Unknown account: nope')
+    const mail = service([new MockMailProvider()])
+    await expect(mail.listFolders('nope')).rejects.toThrow('Unknown account: nope')
+    await expect(mail.syncFolder('nope', 'inbox')).rejects.toThrow('Unknown account: nope')
   })
 })

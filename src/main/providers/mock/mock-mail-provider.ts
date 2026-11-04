@@ -1,29 +1,23 @@
-import type {
-  Account,
-  Folder,
-  FolderId,
-  Message,
-  MessageId,
-  MessageSummary,
-} from '@shared/types/mail'
+import type { Account, Folder, FolderId } from '@shared/types/mail'
+import type { CachedEnvelope, MailCache } from '../../cache/mail-cache'
+import { makePreview, type MessageRef } from '../../mail/message-ref'
+import type { AttachmentContent, ParsedMessage } from '../../mail/parse-message'
 import type { MailProvider } from '../types'
 import { MOCK_FOLDERS, MOCK_MESSAGES, ME, type MockMessage } from './mock-data'
 
 export const MOCK_ACCOUNT_ID = 'mock'
 
-const PREVIEW_LENGTH = 160
+export { makePreview }
 
-/** Turns a message body into a one-line preview for the message list. */
-export function makePreview(bodyText: string, maxLength = PREVIEW_LENGTH): string {
-  if (maxLength <= 0) return ''
-  const singleLine = bodyText.replace(/\s+/g, ' ').trim()
-  if (singleLine.length <= maxLength) return singleLine
-  return `${singleLine.slice(0, maxLength - 1).trimEnd()}…`
+interface StoredMock extends MockMessage {
+  uid: number
+  date: string
+  answered: boolean
 }
 
 /**
- * Serves the sample mailbox from mock-data.ts. Replaced by real providers
- * from M1 on; kept afterwards for UI development and tests.
+ * The sample mailbox shown while no account exists. It goes through the same
+ * cache as real accounts, so the UI and the sync path are exercised either way.
  */
 export class MockMailProvider implements MailProvider {
   readonly account: Account = {
@@ -34,10 +28,15 @@ export class MockMailProvider implements MailProvider {
     kind: 'mock',
   }
 
-  private readonly messages: Message[]
+  private readonly messages: StoredMock[]
 
   constructor(now: Date = new Date()) {
-    this.messages = MOCK_MESSAGES.map((m) => this.toMessage(m, now))
+    this.messages = MOCK_MESSAGES.map((m, index) => ({
+      ...m,
+      uid: index + 1,
+      date: new Date(now.getTime() - m.minutesAgo * 60_000).toISOString(),
+      answered: false,
+    }))
   }
 
   async listFolders(): Promise<Folder[]> {
@@ -52,50 +51,83 @@ export class MockMailProvider implements MailProvider {
     })
   }
 
-  async listMessages(folderId: FolderId): Promise<MessageSummary[]> {
-    return this.messages
-      .filter((m) => m.folderId === folderId)
-      .sort((a, b) => b.date.localeCompare(a.date))
-      .map(toSummary)
+  async syncFolder(folderId: FolderId, cache: MailCache): Promise<boolean> {
+    const inFolder = this.messages.filter((m) => m.folderId === folderId)
+    const uids = new Set(inFolder.map((m) => m.uid))
+    const before = cache.cachedUids(this.account.id, folderId)
+    cache.removeMessages(
+      this.account.id,
+      folderId,
+      before.filter((uid) => !uids.has(uid)),
+    )
+    cache.upsertMessages(this.account.id, folderId, inFolder.map(toEnvelope))
+    for (const m of inFolder) {
+      if (!cache.getBody(this.account.id, folderId, m.uid)) {
+        const parsed = this.parsed(m)
+        cache.setBody(this.account.id, folderId, m.uid, {
+          ...parsed,
+          headers: { references: [] },
+        })
+      }
+    }
+    cache.setFolderState(this.account.id, folderId, {
+      uidValidity: '1',
+      highestUid: Math.max(0, ...uids),
+    })
+    return true
   }
 
-  async getMessage(messageId: MessageId): Promise<Message | null> {
-    return this.messages.find((m) => m.id === messageId) ?? null
+  async fetchMessage(ref: MessageRef): Promise<ParsedMessage> {
+    return this.parsed(this.find(ref))
   }
 
-  private toMessage(m: MockMessage, now: Date): Message {
-    const attachments = m.attachments ?? []
+  async fetchAttachment(ref: MessageRef, attachmentId: string): Promise<AttachmentContent> {
+    const attachment = this.find(ref).attachments?.find((a) => a.id === attachmentId)
+    if (!attachment) throw new Error('This attachment no longer exists.')
     return {
-      id: m.id,
-      accountId: this.account.id,
-      folderId: m.folderId,
-      from: m.from,
+      filename: attachment.filename,
+      mimeType: 'text/plain',
+      content: Buffer.from(`Sample attachment "${attachment.filename}" from the sample mailbox.\n`),
+    }
+  }
+
+  /** The sample mailbox never changes on its own. */
+  watch(_onChange: (folderId: FolderId) => void): () => void {
+    return () => {}
+  }
+
+  async close() {}
+
+  private find(ref: MessageRef): StoredMock {
+    const message = this.messages.find((m) => m.uid === ref.uid && m.folderId === ref.folderId)
+    if (!message) throw new Error('This message no longer exists.')
+    return message
+  }
+
+  private parsed(m: StoredMock): ParsedMessage {
+    return {
+      text: m.bodyText,
+      attachments: m.attachments ?? [],
+      preview: makePreview(m.bodyText),
+      references: [],
       to: m.to,
       cc: m.cc ?? [],
-      subject: m.subject,
-      preview: makePreview(m.bodyText),
-      date: new Date(now.getTime() - m.minutesAgo * 60_000).toISOString(),
-      isRead: m.isRead,
-      isFlagged: m.isFlagged ?? false,
-      hasAttachments: attachments.length > 0,
-      bodyText: m.bodyText,
-      attachments,
     }
   }
 }
 
-function toSummary(message: Message): MessageSummary {
-  const { id, accountId, folderId, from, subject, preview, date, isRead, isFlagged } = message
+function toEnvelope(m: StoredMock): CachedEnvelope {
   return {
-    id,
-    accountId,
-    folderId,
-    from,
-    subject,
-    preview,
-    date,
-    isRead,
-    isFlagged,
-    hasAttachments: message.hasAttachments,
+    uid: m.uid,
+    subject: m.subject,
+    from: m.from,
+    to: m.to,
+    cc: m.cc ?? [],
+    date: m.date,
+    seen: m.isRead,
+    flagged: m.isFlagged ?? false,
+    answered: m.answered,
+    hasAttachments: (m.attachments?.length ?? 0) > 0,
+    size: m.bodyText.length,
   }
 }

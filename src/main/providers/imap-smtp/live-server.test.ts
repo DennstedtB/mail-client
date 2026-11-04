@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import nodemailer from 'nodemailer'
+import { afterAll, describe, expect, it } from 'vitest'
 import type { ImapSmtpSettings } from '@shared/types/account'
+import { MailCache } from '../../cache/mail-cache'
 import { connectionChecker } from './check-connection'
+import { smtpOptions } from './connection-options'
 import { ImapSmtpMailProvider } from './imap-smtp-mail-provider'
 
 /**
@@ -56,5 +59,62 @@ describe.runIf(password)('local test server', () => {
     const folders = await provider.listFolders()
     expect(folders[0]).toMatchObject({ role: 'inbox', name: 'Inbox' })
     expect(folders.map((f) => f.role)).toEqual(expect.arrayContaining(['sent', 'drafts', 'trash']))
+  })
+
+  describe('reading mail', () => {
+    const account = {
+      id: 'live-read',
+      name: 'Live',
+      email: user,
+      senderName: 'Live',
+      kind: 'imap' as const,
+    }
+    const provider = new ImapSmtpMailProvider(account, settings, async () => password!)
+    const cache = new MailCache(':memory:')
+    afterAll(async () => {
+      await provider.close()
+      cache.close()
+    })
+
+    async function sendToSelf(subject: string) {
+      const transport = nodemailer.createTransport(smtpOptions(settings, password!))
+      await transport.sendMail({ from: user, to: user, subject, text: `Body of ${subject}` })
+      transport.close()
+    }
+
+    it('syncs new mail into the cache and downloads it without marking it read', async () => {
+      const subject = `Live sync ${Date.now()}`
+      await sendToSelf(subject)
+      await expect
+        .poll(
+          async () => {
+            await provider.syncFolder('INBOX', cache)
+            return cache.listMessages(account.id, 'INBOX').some((m) => m.subject === subject)
+          },
+          { timeout: 15_000, interval: 1000 },
+        )
+        .toBe(true)
+
+      const row = cache.listMessages(account.id, 'INBOX').find((m) => m.subject === subject)!
+      expect(row.seen).toBe(false)
+      const message = await provider.fetchMessage({ folderId: 'INBOX', uid: row.uid })
+      expect(message.text).toBe(`Body of ${subject}`)
+
+      await provider.syncFolder('INBOX', cache)
+      expect(cache.getMessage(account.id, 'INBOX', row.uid)?.seen).toBe(false)
+    }, 30_000)
+
+    it('reports new mail through IMAP IDLE', async () => {
+      const changes: string[] = []
+      const stop = provider.watch((folder) => changes.push(folder))
+      // Let the watcher connect and settle (it reports once after connecting).
+      await new Promise((resolve) => setTimeout(resolve, 2500))
+      changes.length = 0
+      await sendToSelf(`Live idle ${Date.now()}`)
+      await expect
+        .poll(() => changes.includes('INBOX'), { timeout: 15_000, interval: 250 })
+        .toBe(true)
+      stop()
+    }, 30_000)
   })
 })
