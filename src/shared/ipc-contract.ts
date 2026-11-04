@@ -10,6 +10,7 @@
  * check at the bottom fails until both are in sync.
  */
 
+import type { AddAccountResult, NewAccountInput } from './types/account'
 import type {
   Account,
   AccountId,
@@ -26,14 +27,24 @@ export interface AppInfo {
   platform: string
   /** Current roadmap milestone, shown in the UI while the app is in development. */
   milestone: string
+  /** True when running from source (`npm run dev`), false in the packaged app. */
+  isDevelopment: boolean
 }
 
 export interface AppApi {
   getInfo(): Promise<AppInfo>
 }
 
+export interface AccountsApi {
+  /** The user's accounts, or the sample mailbox while none has been added. */
+  list(): Promise<Account[]>
+  /** Checks IMAP and SMTP, and saves the account only if both work. */
+  add(input: NewAccountInput): Promise<AddAccountResult>
+  /** Removes the account and its stored password. Mail on the server is untouched. */
+  remove(accountId: AccountId): Promise<void>
+}
+
 export interface MailApi {
-  listAccounts(): Promise<Account[]>
   listFolders(accountId: AccountId): Promise<Folder[]>
   /** Newest first. */
   listMessages(accountId: AccountId, folderId: FolderId): Promise<MessageSummary[]>
@@ -42,6 +53,7 @@ export interface MailApi {
 
 export interface Api {
   app: AppApi
+  accounts: AccountsApi
   mail: MailApi
 }
 
@@ -49,7 +61,8 @@ export type Namespace = keyof Api
 
 export const API_METHODS = {
   app: ['getInfo'],
-  mail: ['listAccounts', 'listFolders', 'listMessages', 'getMessage'],
+  accounts: ['list', 'add', 'remove'],
+  mail: ['listFolders', 'listMessages', 'getMessage'],
 } as const satisfies { [N in Namespace]: readonly (keyof Api[N])[] }
 
 /** IPC channel name for a method, e.g. "mail:listFolders". */

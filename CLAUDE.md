@@ -13,6 +13,7 @@ npm test              # unit tests (Vitest)
 npm run build         # typecheck and build to out/
 npm run package:mac   # ad-hoc signed .app in dist/ (macOS only)
 npm run mailserver:up # local Stalwart test server, see docs/dev-mail-server.md
+npm run mailserver:send-test -- --password 'BOB_PASSWORD'  # test message bob → alice
 ```
 
 ## Architecture
@@ -26,7 +27,20 @@ Electron with three isolated parts and one shared contract:
 | `src/renderer/` | Chromium, no Node access | React UI only                                                        |
 | `src/shared/`   | Imported by all three    | Domain types and the IPC contract. No runtime dependencies.          |
 
-Data flow: UI → `window.api.mail.listMessages()` → preload → `ipcRenderer.invoke('mail:listMessages')` → `registerApi` in `src/main/ipc.ts` → `MailService` → `MailProvider` for that account.
+Data flow: UI → `window.api.mail.listFolders()` → preload → `ipcRenderer.invoke('mail:listFolders')` → `registerApi` in `src/main/ipc.ts` → `MailService` → `AccountService` finds the account's `MailProvider` → ImapFlow.
+
+Main-process modules:
+
+| Path                                   | Responsibility                                                                                 |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `src/main/accounts/account-service.ts` | Adds, lists, removes accounts; owns one provider per account; sample mailbox while none exists |
+| `src/main/accounts/account-store.ts`   | Account settings in `accounts.json` (no passwords)                                             |
+| `src/main/accounts/secret-store.ts`    | Passwords in `credentials.json`, encrypted with `safeStorage` (Keychain key)                   |
+| `src/main/providers/imap-smtp/`        | ImapFlow / Nodemailer: connection options, connection check, readable errors, folders          |
+| `src/main/providers/mock/`             | Sample mailbox                                                                                 |
+| `src/main/storage/json-file.ts`        | Atomic JSON writes (0600), write queue                                                         |
+
+Data lives in `app.getPath('userData')`, on macOS `~/Library/Application Support/MailClient`.
 
 ### Rules that keep the architecture intact
 
@@ -43,14 +57,17 @@ Data flow: UI → `window.api.mail.listMessages()` → preload → `ipcRenderer.
 - Strict CSP in `src/renderer/index.html`. No remote scripts, fonts or styles; bundle what is needed.
 - The window can't navigate away from the app; new windows are denied, and https links open in the default browser.
 - Permission requests (camera, notifications, …) are denied until a feature needs one.
-- From M1: credentials only via Electron `safeStorage` (macOS Keychain). Never in plain files, logs or the renderer.
+- Passwords only via `EncryptedSecretStore` (Electron `safeStorage`, async API; key in the macOS Keychain). In plain text a password exists only in the "Add account" form while the user types it, in the one `accounts.add` request that sends it to the main process, and in main-process memory. Never in files, logs or IPC responses, and the renderer never gets it back. On Linux, the weak `basic_text` backend counts as unavailable.
+- No unencrypted connections: TLS or required STARTTLS only. Certificates are always verified, except a self-signed one for a loopback host when the account allows it (`isLoopbackHost`), and that rule is enforced in the main process, not just the form.
+- ImapFlow and Nodemailer run with `logger: false`; nothing about accounts goes to the console.
 - From M2: HTML mail only in a sandboxed iframe, sanitized with DOMPurify, remote content blocked by default.
 
 ## Conventions
 
 - TypeScript strict, `noUncheckedIndexedAccess` on. No `any`; prefer `unknown` and narrow.
 - Prettier (no semicolons, single quotes, width 100) and ESLint decide formatting and style; run `npm run format`.
-- Tests live next to the code as `*.test.ts`. New logic in `src/main` and `src/shared`, and pure helpers in the renderer, gets tests.
+- Tests live next to the code as `*.test.ts`. New logic in `src/main` and `src/shared`, and pure helpers in the renderer, gets tests. `live-server.test.ts` runs against the local Stalwart server only when `MAILCLIENT_LIVE_PASSWORD` is set.
+- Form validation lives in `src/shared/account-validation.ts` and runs in both the UI and the main process.
 - Dependencies: libraries used by the main process at runtime go in `dependencies` (they are shipped in the app). Everything bundled into the renderer, and all tooling, goes in `devDependencies`.
 - UI copy: English, sentence case, plain verbs. Inactive features stay visible with a tooltip naming the milestone that brings them.
 - Failed loads are shown with their reason; they must never look like an empty list.
@@ -62,17 +79,17 @@ Data flow: UI → `window.api.mail.listMessages()` → preload → `ipcRenderer.
 
 Quiet native chrome in the system font; the message is the focus, set in Source Serif 4 (bundled, `font-serif`). One accent color, petrol, used for unread markers, selection and focus.
 
-Tokens are CSS variables in `src/renderer/src/index.css` (light and dark) and mapped to Tailwind colors: `paper`, `surface`, `sidebar`, `ink`, `ink-muted`, `ink-faint`, `line`, `accent`, `accent-soft`, `selection`, `selection-ink`. Use these instead of raw colors. Toolbars are 52px high and act as window drag regions (`drag-region`; interactive children need `no-drag`).
+Tokens are CSS variables in `src/renderer/src/index.css` (light and dark) and mapped to Tailwind colors: `paper`, `surface`, `sidebar`, `ink`, `ink-muted`, `ink-faint`, `line`, `accent`, `accent-soft`, `selection`, `selection-ink`, `danger` and `danger-contrast` (errors and destructive actions). Use these instead of raw colors. Toolbars are 52px high and act as window drag regions (`drag-region`; interactive children need `no-drag`). Dialogs use the native `<dialog>` via `components/Modal.tsx`.
 
-## Libraries (planned per milestone)
+## Libraries
 
-ImapFlow (IMAP), Nodemailer (SMTP), mailparser (MIME), DOMPurify (HTML sanitizing), tsdav (CalDAV), ical.js (iCalendar and recurrence), FullCalendar (calendar views), better-sqlite3 + Drizzle (local cache), @azure/msal-node + Microsoft Graph (M6). Check the current version and maintenance status before adding any of them.
+In use: ImapFlow 2 (IMAP), Nodemailer 10 (SMTP). Planned: mailparser (MIME), DOMPurify (HTML sanitizing), tsdav (CalDAV), ical.js (iCalendar and recurrence), FullCalendar (calendar views), better-sqlite3 + Drizzle (local cache), @azure/msal-node + Microsoft Graph (M6). Check the current version and maintenance status before adding any of them.
 
 ## Milestones
 
 - [x] **M0 Scaffold:** Electron + React + TypeScript, typed IPC contract, provider interfaces, mock provider, three-pane layout, calendar placeholder, tooling, Stalwart dev server
-- [ ] **M1 Account setup:** manual IMAP/SMTP configuration, connection test, credentials in the Keychain
-- [ ] **M2 Reading mail:** real folders and messages, safe HTML rendering, attachments, local cache, IMAP IDLE
+- [x] **M1 Account setup:** manual IMAP/SMTP configuration, connection check with readable errors, password in the Keychain, real folders with unread counts, one sidebar section per account, remove account
+- [ ] **M2 Reading mail:** real messages, safe HTML rendering, attachments, local cache, IMAP IDLE
 - [ ] **M3 Writing mail:** compose, reply / forward, attachments, send, save to Sent
 - [ ] **M4 Mail actions:** read / unread, flag, move, delete, local search
 - [ ] **M5 Calendar:** CalDAV, day / week / month views, create / edit / delete events, show recurring events

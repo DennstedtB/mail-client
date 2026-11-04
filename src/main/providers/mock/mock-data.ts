@@ -50,19 +50,18 @@ export const MOCK_MESSAGES: MockMessage[] = [
     isRead: false,
     bodyText: `Hi Bastian,
 
-this is milestone M0. Everything you see here is sample data, served by a mock provider in the main process and delivered to this window over the same typed IPC contract the real accounts will use.
+everything in this mailbox is sample data. It's shown until you add your own account.
 
 What works now:
-- the three-pane layout: folders, message list, reading pane
-- moving through the list with the arrow keys
-- light and dark mode, following macOS
+- adding an IMAP/SMTP account: MailClient checks both servers first and keeps the password in the macOS Keychain
+- your account's real folders in the sidebar, with unread counts
+- the three-pane layout, arrow keys in the message list, light and dark mode
 
 What comes next:
-- M1: add a real IMAP/SMTP account, with the password stored in the macOS Keychain
-- M2: read real mail, with HTML messages rendered safely and remote images blocked
+- M2: read your real mail, with HTML messages rendered safely and remote images blocked
 - M3: write, reply, forward and send
 
-The toolbar buttons are visible already, but they stay inactive until their milestone.`,
+Use "Add account" in the sidebar to get started. While developing, the dialog can fill in the local test server for you.`,
   },
   {
     id: 'm-workshop',

@@ -19,8 +19,12 @@ function fakeEvent(url: string): IpcMainInvokeEvent {
 }
 
 function createFakeApi() {
+  const accounts = {
+    list: vi.fn(async () => []),
+    add: vi.fn(async () => ({ status: 'failed' })),
+    remove: vi.fn(async () => undefined),
+  }
   const mail = {
-    listAccounts: vi.fn(async () => []),
     listFolders: vi.fn(async function (this: unknown, accountId: string) {
       return [{ accountId, sameThis: this === mail }]
     }),
@@ -30,7 +34,7 @@ function createFakeApi() {
   const app = {
     getInfo: vi.fn(async () => ({ name: 'x', version: '0', platform: 'p', milestone: 'M0' })),
   }
-  return { app, mail } as const
+  return { app, accounts, mail } as const
 }
 
 const isTrusted = (event: IpcMainInvokeEvent) => event.senderFrame?.url === 'app://ui'
@@ -62,6 +66,14 @@ describe('registerApi', () => {
     const result = await handlers.get('mail:listFolders')!(fakeEvent('app://ui'), 'acc-1')
     expect(api.mail.listFolders).toHaveBeenCalledWith('acc-1')
     expect(result).toEqual([{ accountId: 'acc-1', sameThis: true }])
+  })
+
+  it('fails at startup when a contract area has no implementation', () => {
+    const api = createFakeApi() as unknown as Record<string, unknown>
+    delete api['accounts']
+    expect(() => registerApi(api as unknown as Api, isTrusted)).toThrow(
+      'Missing implementation for accounts',
+    )
   })
 
   it('fails at startup when a contract method has no implementation', () => {

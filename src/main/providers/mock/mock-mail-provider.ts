@@ -29,6 +29,7 @@ export class MockMailProvider implements MailProvider {
   readonly account: Account = {
     id: MOCK_ACCOUNT_ID,
     name: 'Sample mailbox',
+    senderName: ME.name ?? '',
     email: ME.email,
     kind: 'mock',
   }

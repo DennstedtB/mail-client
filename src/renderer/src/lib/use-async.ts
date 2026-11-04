@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { errorMessage } from './errors'
 
 export type AsyncState<T> =
   | { status: 'idle' }
@@ -23,10 +24,7 @@ export function useAsync<T>(key: string | null, load: () => Promise<T>): AsyncSt
         current &&
         setResult({
           key,
-          state: {
-            status: 'error',
-            message: error instanceof Error ? error.message : String(error),
-          },
+          state: { status: 'error', message: errorMessage(error) },
         }),
     )
     return () => {

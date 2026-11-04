@@ -18,6 +18,8 @@
   --accent-contrast: #ffffff;
   --selection: #1e6b73; /* focused list selection */
   --selection-ink: #ffffff;
+  --danger: #b42318; /* errors and destructive actions */
+  --danger-contrast: #ffffff;
   color-scheme: light dark;
 }
 
@@ -35,6 +37,8 @@
     --accent-contrast: #0e2427;
     --selection: #275f66;
     --selection-ink: #f1fafb;
+    --danger: #f97066;
+    --danger-contrast: #2b0a06;
   }
 }
 
@@ -51,6 +55,8 @@
   --color-accent-contrast: var(--accent-contrast);
   --color-selection: var(--selection);
   --color-selection-ink: var(--selection-ink);
+  --color-danger: var(--danger);
+  --color-danger-contrast: var(--danger-contrast);
 
   --font-sans:
     -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', system-ui, sans-serif;

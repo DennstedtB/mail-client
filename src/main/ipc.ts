@@ -9,7 +9,8 @@ type AnyMethod = (...args: unknown[]) => Promise<unknown>
  */
 export function registerApi(api: Api, isTrustedSender: (event: IpcMainInvokeEvent) => boolean) {
   for (const namespace of Object.keys(API_METHODS) as Namespace[]) {
-    const target = api[namespace] as unknown as Record<string, AnyMethod>
+    const target = api[namespace] as unknown as Record<string, AnyMethod> | undefined
+    if (!target) throw new Error(`Missing implementation for ${namespace}`)
     for (const method of API_METHODS[namespace]) {
       const channel = channelName(namespace, method)
       const implementation = target[method]
