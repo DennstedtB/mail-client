@@ -11,8 +11,10 @@
     "node": ">=22.12"
   },
   "scripts": {
+    "predev": "install-electron",
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
+    "prepreview": "install-electron",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "lint": "eslint .",
