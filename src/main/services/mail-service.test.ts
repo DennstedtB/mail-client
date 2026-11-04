@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MailChange } from '@shared/types/mail'
 import { MailCache } from '../cache/mail-cache'
+import { decodeMessageId } from '../mail/message-ref'
 import type { MailProvider } from '../providers/types'
 import { MOCK_ACCOUNT_ID, MockMailProvider } from '../providers/mock/mock-mail-provider'
 import type { AttachmentFiles } from './attachment-files'
@@ -106,22 +107,19 @@ describe('MailService', () => {
     const mail = service([provider])
     await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
     const [first] = await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')
+    const row = cache.getMessage(MOCK_ACCOUNT_ID, 'inbox', decodeMessageId(first!.id).uid)!
+    // Envelope only, as after a sync that hasn't prefetched the body yet.
     cache.resetFolder(MOCK_ACCOUNT_ID, 'inbox')
-    await provider.syncFolder('inbox', cache) // envelopes and bodies again
-    cache.setBody(MOCK_ACCOUNT_ID, 'inbox', 1, {
-      text: '',
-      attachments: [],
-      headers: { references: [] },
-      preview: '',
-      to: [],
-      cc: [],
-    })
-    const fetch = vi.spyOn(provider, 'fetchMessage')
-    await mail.getMessage(MOCK_ACCOUNT_ID, first!.id)
-    expect(fetch).not.toHaveBeenCalled() // cached
+    cache.upsertMessages(MOCK_ACCOUNT_ID, 'inbox', [row])
+    expect(cache.getBody(MOCK_ACCOUNT_ID, 'inbox', row.uid)).toBeNull()
 
-    cache.removeMessages(MOCK_ACCOUNT_ID, 'inbox', [1])
-    await provider.syncFolder('inbox', cache)
+    const fetch = vi.spyOn(provider, 'fetchMessage')
+    const message = await mail.getMessage(MOCK_ACCOUNT_ID, first!.id)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(message?.bodyText.length).toBeGreaterThan(0)
+    await mail.getMessage(MOCK_ACCOUNT_ID, first!.id)
+    expect(fetch).toHaveBeenCalledTimes(1) // cached now
+
     expect(await mail.getMessage(MOCK_ACCOUNT_ID, 'not-an-id').catch((e: Error) => e.message)).toBe(
       'Unknown message.',
     )
