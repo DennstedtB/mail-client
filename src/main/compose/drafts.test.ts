@@ -30,6 +30,13 @@ describe('parseRecipients', () => {
     expect(parseRecipients('Bob <bob@>')).toEqual({ ok: false, invalid: ['Bob'] })
   })
 
+  it('keeps semicolons inside quoted names, and splits on the others', () => {
+    expect(parseRecipients('"Ops; Team" <ops@example.org>; bob@x.org')).toEqual({
+      ok: true,
+      addresses: [{ name: 'Ops; Team', email: 'ops@example.org' }, { email: 'bob@x.org' }],
+    })
+  })
+
   it('treats an empty field as no recipients', () => {
     expect(parseRecipients('  ')).toEqual({ ok: true, addresses: [] })
   })

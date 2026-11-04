@@ -6,7 +6,7 @@ export function parseRecipients(
   text: string,
 ): { ok: true; addresses: Address[] } | { ok: false; invalid: string[] } {
   if (!text.trim()) return { ok: true, addresses: [] }
-  const parsed = addressparser(text.replace(/;/g, ','), { flatten: true })
+  const parsed = addressparser(semicolonsToCommas(text), { flatten: true })
   const invalid: string[] = []
   const addresses: Address[] = []
   for (const entry of parsed) {
@@ -18,6 +18,23 @@ export function parseRecipients(
     addresses.push({ ...(entry.name ? { name: entry.name } : {}), email })
   }
   return invalid.length > 0 ? { ok: false, invalid } : { ok: true, addresses }
+}
+
+/** Outlook separates recipients with ";". Turns those into commas, but not inside quoted names. */
+function semicolonsToCommas(text: string): string {
+  let quoted = false
+  let result = ''
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]
+    if (char === '\\' && quoted) {
+      result += char + (text[i + 1] ?? '')
+      i++
+      continue
+    }
+    if (char === '"') quoted = !quoted
+    result += char === ';' && !quoted ? ',' : char
+  }
+  return result
 }
 
 /** Formats addresses the way they are typed into a recipient field. */

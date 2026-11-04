@@ -34,6 +34,12 @@ export interface OutgoingMessage {
 /** Where the copy of a sent message went. */
 export type SentCopy = { saved: true; folderId: FolderId } | { saved: false }
 
+export interface SendOutcome {
+  copy: SentCopy
+  /** Recipients the server refused; the others got the message. */
+  rejected: string[]
+}
+
 export interface MailProvider {
   readonly account: Account
   /** Folders with unread and total counts. */
@@ -48,7 +54,7 @@ export interface MailProvider {
    * error if sending failed; a copy that couldn't be saved doesn't count as
    * a failure (the message is out).
    */
-  send(message: OutgoingMessage): Promise<SentCopy>
+  send(message: OutgoingMessage): Promise<SendOutcome>
   /** Adds or removes flags on messages of one folder. */
   setFlags(folderId: FolderId, uids: number[], change: FlagChange): Promise<void>
   /** Moves messages of one folder to another folder of the same account. */

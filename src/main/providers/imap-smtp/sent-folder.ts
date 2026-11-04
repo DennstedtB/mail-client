@@ -15,15 +15,27 @@ const SENT_NAMES = [
 const selectable = (m: ListResponse) => !m.flags.has('\\Noselect') && !m.flags.has('\\NonExistent')
 
 /**
- * The folder for sent mail: the one marked \Sent, otherwise one with a common
- * name, otherwise a new folder "Sent".
+ * The name of a top-level folder, or null for a nested one. Servers with an
+ * "INBOX." namespace keep top-level folders below the inbox ("INBOX.Sent").
+ */
+function topLevelName(mailbox: Pick<ListResponse, 'path' | 'delimiter'>): string | null {
+  const { delimiter } = mailbox
+  let path = mailbox.path
+  if (delimiter && path.toUpperCase().startsWith(`INBOX${delimiter}`)) path = path.slice(6)
+  return delimiter && path.includes(delimiter) ? null : path.toLowerCase()
+}
+
+/**
+ * The folder for sent mail: the one marked \Sent, otherwise a top-level
+ * folder with a common name (never one nested in, say, an archive).
+ * Null if there is none; then a folder "Sent" is created.
  */
 export function pickSentFolder(mailboxes: ListResponse[]): FolderId | null {
   const usable = mailboxes.filter(selectable)
   const special = usable.find((m) => m.specialUse === '\\Sent')
   if (special) return special.path
   for (const name of SENT_NAMES) {
-    const match = usable.find((m) => m.name.toLowerCase() === name)
+    const match = usable.find((m) => topLevelName(m) === name)
     if (match) return match.path
   }
   return null

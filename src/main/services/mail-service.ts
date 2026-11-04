@@ -199,29 +199,37 @@ export class MailService implements MailApi {
 
   /**
    * Changes flags. The cache (and so the UI) changes first; if the server
-   * refuses, a sync puts the cache back to what the server has.
+   * refuses, the cache gets its previous flags back, and a sync then makes
+   * sure it matches the server.
    */
   async setFlags(accountId: AccountId, messageIds: MessageId[], change: FlagChange) {
     const provider = await this.provider(accountId)
     for (const [folderId, uids] of byFolder(messageIds)) {
-      const updated = uids.flatMap((uid) => {
+      const rows = uids.flatMap((uid) => {
         const row = this.deps.cache.getMessage(accountId, folderId, uid)
-        if (!row) return []
-        return [
-          {
-            uid,
-            seen: change.seen ?? row.seen,
-            flagged: change.flagged ?? row.flagged,
-            answered: change.answered ?? row.answered,
-          },
-        ]
+        return row ? [row] : []
       })
+      const previous = rows.map(({ uid, seen, flagged, answered }) => ({
+        uid,
+        seen,
+        flagged,
+        answered,
+      }))
+      const updated = rows.map((row) => ({
+        uid: row.uid,
+        seen: change.seen ?? row.seen,
+        flagged: change.flagged ?? row.flagged,
+        answered: change.answered ?? row.answered,
+      }))
       if (this.deps.cache.updateFlags(accountId, folderId, updated) > 0) {
         this.deps.emit({ accountId, folderId })
       }
       try {
         await provider.setFlags(folderId, uids, change)
       } catch (error) {
+        if (this.deps.cache.updateFlags(accountId, folderId, previous) > 0) {
+          this.deps.emit({ accountId, folderId })
+        }
         await this.syncFolder(accountId, folderId).catch(() => undefined)
         throw error
       }

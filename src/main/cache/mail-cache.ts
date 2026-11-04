@@ -12,7 +12,8 @@ import {
  * Electron's Node; no native module). It is only a cache: the schema version
  * is checked on open, and a mismatch simply rebuilds it from the server.
  */
-const SCHEMA_VERSION = 1
+/** 2: bodies keep Reply-To (M3). A different version rebuilds the cache from the servers. */
+const SCHEMA_VERSION = 2
 
 const SCHEMA = `
 CREATE TABLE folder_state (

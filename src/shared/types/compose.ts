@@ -38,7 +38,10 @@ export interface Draft {
 export type DraftField = 'to' | 'cc' | 'bcc'
 
 export type SendResult =
-  /** copySaved is false when the message went out but its copy couldn't be put in Sent. */
-  | { status: 'sent'; copySaved: boolean }
+  /**
+   * The message went out. copySaved is false when its copy couldn't be put in
+   * Sent; rejected lists recipients the server refused (everyone else got it).
+   */
+  | { status: 'sent'; copySaved: boolean; rejected: string[] }
   /** Nothing was sent; the message says what to fix in which field. */
   | { status: 'invalid'; field: DraftField; message: string }
