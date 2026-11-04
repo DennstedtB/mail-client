@@ -116,5 +116,32 @@ describe.runIf(password)('local test server', () => {
         .toBe(true)
       stop()
     }, 30_000)
+
+    it('sends, files one copy in Sent, and changes flags', async () => {
+      const subject = `Live send ${Date.now()}`
+      const messageId = `<live-${Date.now()}@mailclient.test>`
+      const raw = Buffer.from(
+        `From: ${user}\r\nTo: ${user}\r\nSubject: ${subject}\r\nMessage-ID: ${messageId}\r\n\r\nHello\r\n`,
+      )
+      const copy = await provider.send({
+        envelope: { from: user, to: [user] },
+        raw,
+        sentCopy: raw,
+        messageId,
+      })
+      expect(copy).toMatchObject({ saved: true })
+      const sentFolder = copy.saved ? copy.folderId : ''
+      await provider.syncFolder(sentFolder, cache)
+      const inSent = cache.listMessages(account.id, sentFolder).filter((m) => m.subject === subject)
+      expect(inSent).toHaveLength(1)
+      expect(inSent[0]?.seen).toBe(true)
+
+      await provider.setFlags(sentFolder, [inSent[0]!.uid], { seen: false, flagged: true })
+      await provider.syncFolder(sentFolder, cache)
+      expect(cache.getMessage(account.id, sentFolder, inSent[0]!.uid)).toMatchObject({
+        seen: false,
+        flagged: true,
+      })
+    }, 30_000)
   })
 })

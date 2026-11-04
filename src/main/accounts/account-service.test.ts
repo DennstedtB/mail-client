@@ -71,6 +71,8 @@ function setup(
         syncFolder: async () => false,
         fetchMessage: async () => Promise.reject(new Error('not used')),
         fetchAttachment: async () => Promise.reject(new Error('not used')),
+        send: async () => Promise.reject(new Error('not used')),
+        setFlags: async () => undefined,
         watch: () => () => {},
         close: vi.fn(async () => undefined),
       }),

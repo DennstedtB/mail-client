@@ -9,9 +9,9 @@ import type {
   MessageSummary,
 } from '@shared/types/mail'
 import type { MailProviderSource } from '../accounts/account-service'
-import type { CachedRow, MailCache } from '../cache/mail-cache'
+import type { CachedBody, CachedRow, MailCache } from '../cache/mail-cache'
 import { decodeMessageId, encodeMessageId, type MessageRef } from '../mail/message-ref'
-import type { MailProvider } from '../providers/types'
+import type { FlagChange, MailProvider } from '../providers/types'
 import type { AttachmentFiles } from './attachment-files'
 
 /** Bodies of the newest messages are downloaded in the background, so they open at once. */
@@ -108,6 +108,7 @@ export class MailService implements MailApi {
         messageId: parsed.messageId,
         inReplyTo: parsed.inReplyTo,
         references: parsed.references,
+        replyTo: parsed.replyTo,
       },
       preview: parsed.preview,
       to: parsed.to,
@@ -115,7 +116,11 @@ export class MailService implements MailApi {
     })
   }
 
-  async getMessage(accountId: AccountId, messageId: MessageId): Promise<Message | null> {
+  /** A cached message with its body; downloads the body if it isn't cached yet. */
+  async loadMessage(
+    accountId: AccountId,
+    messageId: MessageId,
+  ): Promise<{ row: CachedRow; body: CachedBody } | null> {
     const provider = await this.provider(accountId)
     const ref = decodeMessageId(messageId)
     const row = this.deps.cache.getMessage(accountId, ref.folderId, ref.uid)
@@ -126,6 +131,13 @@ export class MailService implements MailApi {
       body = this.deps.cache.getBody(accountId, ref.folderId, ref.uid)
       if (!body) return null
     }
+    return { row, body }
+  }
+
+  async getMessage(accountId: AccountId, messageId: MessageId): Promise<Message | null> {
+    const loaded = await this.loadMessage(accountId, messageId)
+    if (!loaded) return null
+    const { row, body } = loaded
     return {
       ...toSummary(accountId, { ...row, preview: body.preview }),
       to: body.to.length > 0 ? body.to : row.to,
@@ -148,6 +160,43 @@ export class MailService implements MailApi {
     return this.deps.files.save(
       await provider.fetchAttachment(decodeMessageId(messageId), attachmentId),
     )
+  }
+
+  /**
+   * Changes flags. The cache (and so the UI) changes first; if the server
+   * refuses, a sync puts the cache back to what the server has.
+   */
+  async setFlags(accountId: AccountId, messageIds: MessageId[], change: FlagChange) {
+    const provider = await this.provider(accountId)
+    const byFolder = new Map<FolderId, number[]>()
+    for (const ref of messageIds.map(decodeMessageId)) {
+      byFolder.set(ref.folderId, [...(byFolder.get(ref.folderId) ?? []), ref.uid])
+    }
+    for (const [folderId, uids] of byFolder) {
+      const updated = uids.flatMap((uid) => {
+        const row = this.deps.cache.getMessage(accountId, folderId, uid)
+        if (!row) return []
+        return [
+          {
+            uid,
+            seen: change.seen ?? row.seen,
+            flagged: change.flagged ?? row.flagged,
+            answered: change.answered ?? row.answered,
+          },
+        ]
+      })
+      if (this.deps.cache.updateFlags(accountId, folderId, updated) > 0) {
+        this.deps.emit({ accountId, folderId })
+      }
+      try {
+        await provider.setFlags(folderId, uids, change)
+      } catch (error) {
+        await this.syncFolder(accountId, folderId).catch(() => undefined)
+        throw error
+      }
+      // Again, so unread counts (which come from the server) catch up.
+      this.deps.emit({ accountId, folderId })
+    }
   }
 
   /** Starts watching every account that isn't watched yet (new mail → sync → UI update). */

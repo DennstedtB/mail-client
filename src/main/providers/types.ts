@@ -17,6 +17,24 @@ import type { MailCache } from '../cache/mail-cache'
 import type { MessageRef } from '../mail/message-ref'
 import type { AttachmentContent, ParsedMessage } from '../mail/parse-message'
 
+/** IMAP system flags the app changes. */
+export type FlagChange = Partial<Record<'seen' | 'flagged' | 'answered', boolean>>
+
+/** A message ready to send, built by the compose service. */
+export interface OutgoingMessage {
+  /** SMTP envelope: the sender and every recipient, Bcc included. */
+  envelope: { from: string; to: string[] }
+  /** The message as recipients get it: without a Bcc header. */
+  raw: Buffer
+  /** The copy for the Sent folder: with Bcc, so the sender still sees who got it. */
+  sentCopy: Buffer
+  /** Message-ID header, including the angle brackets. */
+  messageId: string
+}
+
+/** Where the copy of a sent message went. */
+export type SentCopy = { saved: true; folderId: FolderId } | { saved: false }
+
 export interface MailProvider {
   readonly account: Account
   /** Folders with unread and total counts. */
@@ -26,6 +44,14 @@ export interface MailProvider {
   /** Downloads one message in full, without marking it as read. */
   fetchMessage(ref: MessageRef): Promise<ParsedMessage>
   fetchAttachment(ref: MessageRef, attachmentId: string): Promise<AttachmentContent>
+  /**
+   * Sends a message and saves a copy in the Sent folder. Throws a readable
+   * error if sending failed; a copy that couldn't be saved doesn't count as
+   * a failure (the message is out).
+   */
+  send(message: OutgoingMessage): Promise<SentCopy>
+  /** Adds or removes flags on messages of one folder. */
+  setFlags(folderId: FolderId, uids: number[], change: FlagChange): Promise<void>
   /** Watches for new mail; calls onChange with the folder that changed. Returns a stop function. */
   watch(onChange: (folderId: FolderId) => void): () => void
   /** Closes all connections, e.g. when the account is removed. */

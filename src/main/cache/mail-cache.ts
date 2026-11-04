@@ -81,11 +81,13 @@ export interface CachedRow extends CachedEnvelope {
   preview: string
 }
 
-/** Headers needed later for replies (M3). */
+/** Headers needed for replies. */
 export interface BodyHeaders {
   messageId?: string
   inReplyTo?: string
   references: string[]
+  /** Reply-To; absent in bodies cached before M3, which is treated as none. */
+  replyTo?: Address[]
 }
 
 export interface CachedBody {

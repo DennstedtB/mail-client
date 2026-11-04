@@ -1,4 +1,5 @@
 import { ImapFlow } from 'imapflow'
+import nodemailer from 'nodemailer'
 import type { ImapSmtpSettings } from '@shared/types/account'
 import type { Account, Folder, FolderId } from '@shared/types/mail'
 import type { MailCache } from '../../cache/mail-cache'
@@ -9,12 +10,20 @@ import {
   type AttachmentContent,
   type ParsedMessage,
 } from '../../mail/parse-message'
-import type { MailProvider } from '../types'
-import { imapOptions } from './connection-options'
+import type { FlagChange, MailProvider, OutgoingMessage, SentCopy } from '../types'
+import { imapOptions, smtpOptions } from './connection-options'
 import { describeConnectionError } from './describe-error'
 import { downloadSource, syncImapFolder } from './folder-sync'
 import { toFolders } from './folders'
 import { FolderWatcher, ImapConnection } from './imap-connection'
+import { describeSendError } from './send-error'
+import { saveSentCopy } from './sent-folder'
+
+const IMAP_FLAGS: Record<keyof FlagChange, string> = {
+  seen: '\\Seen',
+  flagged: '\\Flagged',
+  answered: '\\Answered',
+}
 
 /** Turns library errors into the readable messages the account dialog uses too. */
 function readable(error: unknown): Error {
@@ -80,6 +89,50 @@ export class ImapSmtpMailProvider implements MailProvider {
 
   async fetchAttachment(ref: MessageRef, attachmentId: string): Promise<AttachmentContent> {
     return extractAttachment(await this.source(ref), attachmentId)
+  }
+
+  async send(message: OutgoingMessage): Promise<SentCopy> {
+    const transport = nodemailer.createTransport(
+      smtpOptions(this.settings, await this.getPassword()),
+    )
+    try {
+      await transport.sendMail({ envelope: message.envelope, raw: message.raw })
+    } catch (error) {
+      throw describeSendError(error)
+    } finally {
+      transport.close()
+    }
+    try {
+      const folderId = await this.connection.use((client) => saveSentCopy(client, message))
+      return { saved: true, folderId }
+    } catch {
+      return { saved: false }
+    }
+  }
+
+  async setFlags(folderId: FolderId, uids: number[], change: FlagChange) {
+    if (uids.length === 0) return
+    const add: string[] = []
+    const remove: string[] = []
+    for (const key of Object.keys(IMAP_FLAGS) as (keyof FlagChange)[]) {
+      const value = change[key]
+      if (value !== undefined) (value ? add : remove).push(IMAP_FLAGS[key])
+    }
+    try {
+      await this.connection.use(async (client) => {
+        // A read-write lock (SELECT); syncs use read-only ones (EXAMINE).
+        const lock = await client.getMailboxLock(folderId)
+        try {
+          const range = uids.join(',')
+          if (add.length > 0) await client.messageFlagsAdd(range, add, { uid: true })
+          if (remove.length > 0) await client.messageFlagsRemove(range, remove, { uid: true })
+        } finally {
+          lock.release()
+        }
+      })
+    } catch (error) {
+      throw readable(error)
+    }
   }
 
   watch(onChange: (folderId: FolderId) => void): () => void {

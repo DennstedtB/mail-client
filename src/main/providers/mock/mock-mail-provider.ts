@@ -2,7 +2,7 @@ import type { Account, Folder, FolderId } from '@shared/types/mail'
 import type { CachedEnvelope, MailCache } from '../../cache/mail-cache'
 import { makePreview, type MessageRef } from '../../mail/message-ref'
 import type { AttachmentContent, ParsedMessage } from '../../mail/parse-message'
-import type { MailProvider } from '../types'
+import type { FlagChange, MailProvider } from '../types'
 import { MOCK_FOLDERS, MOCK_MESSAGES, ME, type MockMessage } from './mock-data'
 
 export const MOCK_ACCOUNT_ID = 'mock'
@@ -91,6 +91,19 @@ export class MockMailProvider implements MailProvider {
     }
   }
 
+  async send(): Promise<never> {
+    throw new Error("The sample mailbox can't send mail. Add an account to send messages.")
+  }
+
+  async setFlags(folderId: FolderId, uids: number[], change: FlagChange) {
+    for (const m of this.messages) {
+      if (m.folderId !== folderId || !uids.includes(m.uid)) continue
+      if (change.seen !== undefined) m.isRead = change.seen
+      if (change.flagged !== undefined) m.isFlagged = change.flagged
+      if (change.answered !== undefined) m.answered = change.answered
+    }
+  }
+
   /** The sample mailbox never changes on its own. */
   watch(_onChange: (folderId: FolderId) => void): () => void {
     return () => {}
@@ -110,6 +123,7 @@ export class MockMailProvider implements MailProvider {
       attachments: m.attachments ?? [],
       preview: makePreview(m.bodyText),
       references: [],
+      replyTo: [],
       to: m.to,
       cc: m.cc ?? [],
     }
