@@ -173,6 +173,7 @@ function toEnvelope(m: StoredMock): CachedEnvelope {
     flagged: m.isFlagged ?? false,
     answered: m.answered,
     hasAttachments: (m.attachments?.length ?? 0) > 0,
+    attachmentNames: (m.attachments ?? []).map((a) => a.filename),
     size: m.bodyText.length,
   }
 }

@@ -84,6 +84,9 @@ export type FlagChange = Partial<Record<'seen' | 'flagged' | 'answered', boolean
 /** The message list shows at most this many messages of a folder, the newest first. */
 export const MESSAGE_LIST_LIMIT = 1000
 
+/** Search lists at most this many matches, newest first. */
+export const SEARCH_RESULT_LIMIT = 200
+
 /** Sent from the main process when the cache changed, e.g. after a sync or new mail. */
 export interface MailChange {
   accountId: AccountId

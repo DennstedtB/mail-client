@@ -13,16 +13,40 @@ export const INITIAL_WINDOW = 300
 /** Types mailparser treats as message text unless they are explicitly attachments. */
 const BODY_TYPES = ['text/plain', 'text/html', 'message/delivery-status']
 
+function partName(node: MessageStructureObject): string | undefined {
+  return node.dispositionParameters?.['filename'] || node.parameters?.['name'] || undefined
+}
+
 /**
- * True if any leaf part is meant as a file: an attachment, or a named part
- * that isn't message text (the same rule mailparser uses for the attachment list).
+ * True if a leaf part is meant as a file: an attachment, or a named part that
+ * isn't message text (the same rule mailparser uses for the attachment list).
  */
-export function hasAttachmentParts(node: MessageStructureObject | undefined): boolean {
-  if (!node) return false
-  if (node.childNodes?.length) return node.childNodes.some(hasAttachmentParts)
+function isAttachmentPart(node: MessageStructureObject): boolean {
   if (node.disposition === 'attachment') return true
-  const named = Boolean(node.dispositionParameters?.['filename'] || node.parameters?.['name'])
-  return named && !BODY_TYPES.includes(node.type.toLowerCase()) && node.disposition !== 'inline'
+  return (
+    Boolean(partName(node)) &&
+    !BODY_TYPES.includes(node.type.toLowerCase()) &&
+    node.disposition !== 'inline'
+  )
+}
+
+function attachmentParts(node: MessageStructureObject | undefined): MessageStructureObject[] {
+  if (!node) return []
+  if (node.childNodes?.length) return node.childNodes.flatMap(attachmentParts)
+  return isAttachmentPart(node) ? [node] : []
+}
+
+/** True if any leaf part is meant as a file. */
+export function hasAttachmentParts(node: MessageStructureObject | undefined): boolean {
+  return attachmentParts(node).length > 0
+}
+
+/** File names of the attachments (ImapFlow decodes encoded and RFC 2231 names), for search. */
+export function attachmentNames(node: MessageStructureObject | undefined): string[] {
+  return attachmentParts(node).flatMap((part) => {
+    const name = partName(part)?.trim()
+    return name ? [name] : []
+  })
 }
 
 function toAddress(value: MessageAddressObject | undefined): Address | undefined {
@@ -61,6 +85,7 @@ export function toCachedEnvelope(message: FetchMessageObject): CachedEnvelope {
     cc: toAddresses(envelope?.cc),
     date: toIso(envelope?.date) ?? toIso(message.internalDate) ?? new Date(0).toISOString(),
     hasAttachments: hasAttachmentParts(message.bodyStructure),
+    attachmentNames: attachmentNames(message.bodyStructure),
     size: message.size ?? 0,
   }
 }
