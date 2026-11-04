@@ -4,7 +4,7 @@ import { MailCache } from '../cache/mail-cache'
 import type { MailProvider } from '../providers/types'
 import { MOCK_ACCOUNT_ID, MockMailProvider } from '../providers/mock/mock-mail-provider'
 import type { AttachmentFiles } from './attachment-files'
-import { MailService } from './mail-service'
+import { MailService, WATCH_RETRY_MS } from './mail-service'
 
 let cache: MailCache
 let emitted: MailChange[]
@@ -47,15 +47,46 @@ describe('MailService', () => {
     expect(emitted).toContainEqual({ accountId: MOCK_ACCOUNT_ID, folderId: 'inbox' })
   })
 
-  it('joins a sync that is already running instead of starting another', async () => {
+  it('joins a running sync, then syncs once more for what arrived meanwhile', async () => {
     const provider = new MockMailProvider()
     const sync = vi.spyOn(provider, 'syncFolder')
     const mail = service([provider])
     await Promise.all([
       mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox'),
       mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox'),
+      mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox'),
     ])
-    expect(sync).toHaveBeenCalledTimes(1)
+    expect(sync).toHaveBeenCalledTimes(2)
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+    expect(sync).toHaveBeenCalledTimes(3)
+  })
+
+  it('tries a failed sync for new mail again later', async () => {
+    vi.useFakeTimers()
+    try {
+      const provider = new MockMailProvider()
+      let report: (folderId: string) => void = () => {}
+      vi.spyOn(provider, 'watch').mockImplementation((onChange) => {
+        report = onChange
+        return () => {}
+      })
+      const sync = vi.spyOn(provider, 'syncFolder').mockRejectedValueOnce(new Error('offline'))
+      const mail = service([provider])
+      await mail.watchAll()
+      report('inbox')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(sync).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(WATCH_RETRY_MS)
+      expect(sync).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports no change when a sample folder is synced again unchanged', async () => {
+    const provider = new MockMailProvider()
+    expect(await provider.syncFolder('inbox', cache)).toBe(true)
+    expect(await provider.syncFolder('inbox', cache)).toBe(false)
   })
 
   it('returns full messages with recipients and attachments', async () => {

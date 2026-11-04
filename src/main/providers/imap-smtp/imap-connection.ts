@@ -33,6 +33,11 @@ export class ImapConnection {
         if (this.client === client) this.client = null
       })
       await client.connect()
+      // Closed while connecting (account removed): don't keep the connection around.
+      if (this.closed) {
+        await client.logout().catch(() => client.close())
+        throw new Error('The account was removed.')
+      }
       this.client = client
       return client
     })().finally(() => {
@@ -98,6 +103,10 @@ export class FolderWatcher {
         return
       }
       await client.mailboxOpen(this.config.folder, { readOnly: true })
+      if (this.stopped) {
+        await client.logout().catch(() => client.close())
+        return
+      }
       this.client = client
       this.attempt = 0
       // Catch up on anything that arrived while disconnected.

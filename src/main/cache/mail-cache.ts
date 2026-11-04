@@ -1,5 +1,11 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
-import type { AccountId, Address, Attachment, FolderId } from '@shared/types/mail'
+import {
+  MESSAGE_LIST_LIMIT,
+  type AccountId,
+  type Address,
+  type Attachment,
+  type FolderId,
+} from '@shared/types/mail'
 
 /**
  * The local copy of message lists and bodies (node:sqlite, built into
@@ -212,9 +218,11 @@ export class MailCache {
     const removeIndex = this.db.prepare(
       'DELETE FROM message_search WHERE account_id = ? AND folder = ? AND uid = ?',
     )
+    // The body text comes from a downloaded body, if there is one, so it stays searchable.
     const index = this.db.prepare(
       `INSERT INTO message_search (account_id, folder, uid, subject, sender, recipients, body)
-       VALUES (?, ?, ?, ?, ?, ?, '')`,
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, coalesce(
+         (SELECT text FROM bodies WHERE account_id = ?1 AND folder = ?2 AND uid = ?3), ''))`,
     )
     this.transaction(() => {
       for (const m of messages) {
@@ -283,7 +291,7 @@ export class MailCache {
     return rows.map((r) => r.uid)
   }
 
-  listMessages(accountId: AccountId, folder: FolderId, limit = 1000): CachedRow[] {
+  listMessages(accountId: AccountId, folder: FolderId, limit = MESSAGE_LIST_LIMIT): CachedRow[] {
     const rows = this.db
       .prepare(
         `SELECT * FROM messages WHERE account_id = ? AND folder = ?

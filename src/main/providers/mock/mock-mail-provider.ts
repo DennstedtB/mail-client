@@ -55,14 +55,19 @@ export class MockMailProvider implements MailProvider {
     const inFolder = this.messages.filter((m) => m.folderId === folderId)
     const uids = new Set(inFolder.map((m) => m.uid))
     const before = cache.cachedUids(this.account.id, folderId)
-    cache.removeMessages(
+    const known = new Set(before)
+    const stale = before.filter((uid) => !uids.has(uid))
+    cache.removeMessages(this.account.id, folderId, stale)
+    const flagChanges = cache.updateFlags(
       this.account.id,
       folderId,
-      before.filter((uid) => !uids.has(uid)),
+      inFolder.filter((m) => known.has(m.uid)).map(toEnvelope),
     )
+    let changed = stale.length > 0 || flagChanges > 0 || inFolder.some((m) => !known.has(m.uid))
     cache.upsertMessages(this.account.id, folderId, inFolder.map(toEnvelope))
     for (const m of inFolder) {
       if (!cache.getBody(this.account.id, folderId, m.uid)) {
+        changed = true
         const parsed = this.parsed(m)
         cache.setBody(this.account.id, folderId, m.uid, {
           ...parsed,
@@ -74,7 +79,7 @@ export class MockMailProvider implements MailProvider {
       uidValidity: '1',
       highestUid: Math.max(0, ...uids),
     })
-    return true
+    return changed
   }
 
   async fetchMessage(ref: MessageRef): Promise<ParsedMessage> {

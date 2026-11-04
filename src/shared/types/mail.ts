@@ -78,6 +78,9 @@ export interface Message extends MessageSummary {
   attachments: Attachment[]
 }
 
+/** The message list shows at most this many messages of a folder, the newest first. */
+export const MESSAGE_LIST_LIMIT = 1000
+
 /** Sent from the main process when the cache changed, e.g. after a sync or new mail. */
 export interface MailChange {
   accountId: AccountId

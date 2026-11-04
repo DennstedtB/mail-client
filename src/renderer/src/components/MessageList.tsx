@@ -1,6 +1,11 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { Flag, LoaderCircle, Paperclip, Reply, RotateCw, Search } from 'lucide-react'
-import type { Folder, MessageId, MessageSummary } from '@shared/types/mail'
+import {
+  MESSAGE_LIST_LIMIT,
+  type Folder,
+  type MessageId,
+  type MessageSummary,
+} from '@shared/types/mail'
 import { cn } from '../lib/cn'
 import { displayName, formatListDate } from '../lib/format'
 import type { AsyncState } from '../lib/use-async'
@@ -112,7 +117,7 @@ export function MessageList({
 
       {messages.status === 'loading' && <ListNote>Loading messages…</ListNote>}
       {messages.status === 'error' && <ListNote>{messages.message}</ListNote>}
-      {messages.status === 'ready' && items.length === 0 && (
+      {messages.status === 'ready' && items.length === 0 && sync.status !== 'error' && (
         <ListNote>
           {sync.status === 'running'
             ? 'Loading messages from the server…'
@@ -143,6 +148,11 @@ export function MessageList({
             />
           ))}
         </ul>
+      )}
+      {items.length >= MESSAGE_LIST_LIMIT && (
+        <p className="shrink-0 border-t border-line px-4 py-2 text-[11.5px] text-ink-muted">
+          Showing the newest {MESSAGE_LIST_LIMIT.toLocaleString()} messages of this folder.
+        </p>
       )}
     </section>
   )
