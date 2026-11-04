@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { readFile, rm, stat } from 'node:fs/promises'
+import { rm, stat } from 'node:fs/promises'
 import {
   app,
   BrowserWindow,
@@ -25,6 +25,7 @@ import { registerApi } from './ipc'
 import { connectionChecker } from './providers/imap-smtp/check-connection'
 import { ImapSmtpMailProvider } from './providers/imap-smtp/imap-smtp-mail-provider'
 import { MockMailProvider } from './providers/mock/mock-mail-provider'
+import { readLimited } from './storage/read-limited'
 import { createAttachmentFiles } from './services/attachment-files'
 import { MailService } from './services/mail-service'
 
@@ -132,7 +133,7 @@ function createServices() {
       const info = await stat(path).catch(() => null)
       return info?.isFile() ? info.size : null
     },
-    readFile: (path) => readFile(path),
+    readFile: readLimited,
     locale: app.getLocale(),
   })
 

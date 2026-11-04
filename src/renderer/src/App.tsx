@@ -3,7 +3,7 @@ import type { ComposeKind, Draft } from '@shared/types/compose'
 import type { Account, MessageId, MessageSummary } from '@shared/types/mail'
 import { AddAccountDialog } from './components/AddAccountDialog'
 import { CalendarPlaceholder } from './components/CalendarPlaceholder'
-import { ComposePane, type ComposeOutcome } from './components/ComposePane'
+import { ComposePane, type SentInfo } from './components/ComposePane'
 import { DiscardDraftDialog } from './components/DiscardDraftDialog'
 import { MessageList, type SyncState } from './components/MessageList'
 import { ReadingPane } from './components/ReadingPane'
@@ -30,7 +30,12 @@ export function App() {
   const [removing, setRemoving] = useState<Account | null>(null)
   const [compose, setCompose] = useState<{ draft: Draft; key: number } | null>(null)
   const composeChanged = useRef(false)
-  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
+  // What to do after "Discard this message?" is answered. A ref, so a send that
+  // finishes while the question is open sees the current value.
+  const pendingAction = useRef<(() => void) | null>(null)
+  const [askingToDiscard, setAskingToDiscard] = useState(false)
+  // Only the newest "prepare a draft" request may open the compose pane.
+  const prepareRequest = useRef(0)
   const [toast, setToast] = useState<ToastMessage | null>(null)
   const today = useToday()
 
@@ -44,14 +49,39 @@ export function App() {
 
   /** Runs an action that leaves the compose pane; asks first if that would lose changes. */
   function leaveCompose(action: () => void) {
+    prepareRequest.current += 1 // Navigating supersedes a draft that is still being prepared.
     if (!compose) return action()
     if (composeChanged.current) {
-      setPendingAction(() => action)
+      pendingAction.current = action
+      setAskingToDiscard(true)
       return
     }
     setCompose(null)
     action()
   }
+
+  function closeCompose() {
+    setCompose(null)
+    composeChanged.current = false
+    // Closed while "Discard this message?" was open (it was sent): nothing is lost, so go on.
+    const action = pendingAction.current
+    pendingAction.current = null
+    setAskingToDiscard(false)
+    action?.()
+  }
+
+  const showSent = useCallback(
+    ({ copySaved, rejected }: SentInfo) => {
+      if (rejected.length > 0) {
+        showToast(`Message sent, but the server refused: ${rejected.join(', ')}`, 'problem')
+      } else if (!copySaved) {
+        showToast("Message sent. Its copy couldn't be saved in Sent.", 'problem')
+      } else {
+        showToast('Message sent')
+      }
+    },
+    [showToast],
+  )
 
   // The main process announces every change to cached mail: syncs, new mail via IDLE.
   useEffect(() => api.events.onMailChanged(() => setMailVersion((v) => v + 1)), [])
@@ -135,31 +165,25 @@ export function App() {
 
   function startCompose(kind: ComposeKind, accountId: string, sourceMessageId?: MessageId) {
     leaveCompose(() => {
+      const request = ++prepareRequest.current
       api.compose.prepare(kind, accountId, sourceMessageId).then(
         (draft) => {
+          if (request !== prepareRequest.current) {
+            // Superseded: the main process can forget its forwarded attachments.
+            const ids = draft.attachments.map((a) => a.id)
+            if (ids.length > 0) void api.compose.releaseAttachments(ids).catch(() => undefined)
+            return
+          }
           composeChanged.current = false
           setCompose({ draft, key: Date.now() })
         },
-        (error: unknown) =>
-          showToast(`Couldn't start the message: ${errorMessage(error)}`, 'problem'),
+        (error: unknown) => {
+          if (request === prepareRequest.current) {
+            showToast(`Couldn't start the message: ${errorMessage(error)}`, 'problem')
+          }
+        },
       )
     })
-  }
-
-  function closeCompose(outcome: ComposeOutcome) {
-    setCompose(null)
-    composeChanged.current = false
-    // Sent while "Discard this message?" was open: nothing is lost anymore, so just go on.
-    if (pendingAction) {
-      setPendingAction(null)
-      pendingAction()
-    }
-    if (outcome.type === 'sent') {
-      showToast(
-        outcome.copySaved ? 'Message sent' : "Message sent. Its copy couldn't be saved in Sent.",
-        outcome.copySaved ? 'done' : 'problem',
-      )
-    }
   }
 
   // ⌘N starts a new message, as in other mail apps.
@@ -203,7 +227,12 @@ export function App() {
           })
         }
         onAddAccount={() => setAdding(true)}
-        onRemoveAccount={setRemoving}
+        onRemoveAccount={(account) =>
+          // Removing the account of the open draft closes the draft, so ask first.
+          compose?.draft.accountId === account.id
+            ? leaveCompose(() => setRemoving(account))
+            : setRemoving(account)
+        }
         appInfo={appInfo.status === 'ready' ? appInfo.data : undefined}
       />
 
@@ -225,6 +254,7 @@ export function App() {
               key={compose.key}
               initial={compose.draft}
               account={composeAccount}
+              onSent={showSent}
               onClose={closeCompose}
               onChangedChange={setComposeChanged}
             />
@@ -252,15 +282,12 @@ export function App() {
         showLocalPreset={appInfo.status === 'ready' && appInfo.data.isDevelopment}
       />
       <DiscardDraftDialog
-        open={pendingAction !== null}
-        onCancel={() => setPendingAction(null)}
-        onDiscard={() => {
-          const action = pendingAction
-          setPendingAction(null)
-          setCompose(null)
-          composeChanged.current = false
-          action?.()
+        open={askingToDiscard}
+        onCancel={() => {
+          pendingAction.current = null
+          setAskingToDiscard(false)
         }}
+        onDiscard={closeCompose}
       />
       <Toast toast={toast} onDone={hideToast} />
       <RemoveAccountDialog

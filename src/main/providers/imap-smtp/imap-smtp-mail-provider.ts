@@ -10,7 +10,7 @@ import {
   type AttachmentContent,
   type ParsedMessage,
 } from '../../mail/parse-message'
-import type { FlagChange, MailProvider, OutgoingMessage, SentCopy } from '../types'
+import type { FlagChange, MailProvider, OutgoingMessage, SendOutcome } from '../types'
 import { imapOptions, smtpOptions } from './connection-options'
 import { describeConnectionError } from './describe-error'
 import { downloadSource, syncImapFolder } from './folder-sync'
@@ -91,12 +91,15 @@ export class ImapSmtpMailProvider implements MailProvider {
     return extractAttachment(await this.source(ref), attachmentId)
   }
 
-  async send(message: OutgoingMessage): Promise<SentCopy> {
+  async send(message: OutgoingMessage): Promise<SendOutcome> {
     const transport = nodemailer.createTransport(
       smtpOptions(this.settings, await this.getPassword()),
     )
+    let rejected: string[]
     try {
-      await transport.sendMail({ envelope: message.envelope, raw: message.raw })
+      // Resolves when at least one recipient was accepted; the refused ones are listed.
+      const info = await transport.sendMail({ envelope: message.envelope, raw: message.raw })
+      rejected = (info.rejected as unknown[]).map(recipientAddress)
     } catch (error) {
       throw describeSendError(error)
     } finally {
@@ -104,9 +107,9 @@ export class ImapSmtpMailProvider implements MailProvider {
     }
     try {
       const folderId = await this.connection.use((client) => saveSentCopy(client, message))
-      return { saved: true, folderId }
+      return { copy: { saved: true, folderId }, rejected }
     } catch {
-      return { saved: false }
+      return { copy: { saved: false }, rejected }
     }
   }
 
@@ -154,4 +157,13 @@ export class ImapSmtpMailProvider implements MailProvider {
     await Promise.all([this.watcher?.stop(), this.connection.close()])
     this.watcher = null
   }
+}
+
+/** Nodemailer lists refused recipients as strings or as { name, address }. */
+function recipientAddress(recipient: unknown): string {
+  if (typeof recipient === 'string') return recipient
+  if (typeof recipient === 'object' && recipient !== null && 'address' in recipient) {
+    return String(recipient.address)
+  }
+  return String(recipient)
 }

@@ -43,7 +43,12 @@ const BODY: CachedBody = {
 }
 
 function setup(
-  options: { files?: Record<string, Buffer>; sendError?: Error; saved?: boolean } = {},
+  options: {
+    files?: Record<string, Buffer>
+    sendError?: Error
+    saved?: boolean
+    rejected?: string[]
+  } = {},
 ) {
   const sent: OutgoingMessage[] = []
   const provider: MailProvider = {
@@ -59,9 +64,13 @@ function setup(
     send: vi.fn(async (message: OutgoingMessage) => {
       if (options.sendError) throw options.sendError
       sent.push(message)
-      return options.saved === false
-        ? { saved: false as const }
-        : { saved: true as const, folderId: 'Sent' }
+      return {
+        copy:
+          options.saved === false
+            ? { saved: false as const }
+            : { saved: true as const, folderId: 'Sent' },
+        rejected: options.rejected ?? [],
+      }
     }),
     setFlags: vi.fn(async () => undefined),
     watch: () => () => {},
@@ -79,10 +88,10 @@ function setup(
     mail,
     pickFiles: async () => picked.splice(0),
     fileSize: async (path) => files[path]?.length ?? null,
-    readFile: async (path) => {
+    readFile: async (path, maxBytes) => {
       const content = files[path]
       if (!content) throw new Error('ENOENT')
-      return content
+      return content.subarray(0, maxBytes + 1)
     },
     now: () => new Date('2026-11-04T10:00:00Z'),
   })
@@ -149,7 +158,7 @@ describe('ComposeService.send', () => {
     const result = await service.send(
       draft({ cc: 'carol@example.org', bcc: 'Secret <secret@example.org>' }),
     )
-    expect(result).toEqual({ status: 'sent', copySaved: true })
+    expect(result).toEqual({ status: 'sent', copySaved: true, rejected: [] })
     const [message] = sent
     expect(message?.envelope).toEqual({
       from: 'alice@example.org',
@@ -210,7 +219,7 @@ describe('ComposeService.send', () => {
     await expect(service.send(draft({ attachments }))).rejects.toThrow('no longer available')
     pick('/x.txt')
     const again = await service.addAttachments()
-    await service.discard(draft({ attachments: again }))
+    await service.releaseAttachments(again.map((a) => a.id))
     await expect(service.send(draft({ attachments: again }))).rejects.toThrow('no longer available')
   })
 
@@ -249,9 +258,32 @@ describe('ComposeService.send', () => {
     await expect(service.send(draft({ attachments }))).rejects.toThrow("wasn't sent")
   })
 
+  it('passes on recipients the server refused', async () => {
+    const { service } = setup({ rejected: ['nobody@example.org'] })
+    expect(await service.send(draft({ cc: 'nobody@example.org' }))).toEqual({
+      status: 'sent',
+      copySaved: true,
+      rejected: ['nobody@example.org'],
+    })
+  })
+
+  it('notices a file that grew past the limit after it was picked', async () => {
+    const files: Record<string, Buffer> = { '/grows.log': Buffer.from('small') }
+    const { service, pick, provider } = setup({ files })
+    pick('/grows.log')
+    const attachments = await service.addAttachments()
+    files['/grows.log'] = Buffer.alloc(MAX_ATTACHMENT_BYTES + 10)
+    await expect(service.send(draft({ attachments }))).rejects.toThrow(/limit is 18 MB/)
+    expect(provider.send).not.toHaveBeenCalled()
+  })
+
   it('says when the message went out but the copy was not saved', async () => {
     const { service, mail } = setup({ saved: false })
-    expect(await service.send(draft())).toEqual({ status: 'sent', copySaved: false })
+    expect(await service.send(draft())).toEqual({
+      status: 'sent',
+      copySaved: false,
+      rejected: [],
+    })
     expect(mail.syncFolder).not.toHaveBeenCalled()
   })
 })

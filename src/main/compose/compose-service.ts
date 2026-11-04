@@ -34,7 +34,8 @@ export interface ComposeServiceDeps {
   pickFiles(): Promise<string[]>
   /** Size of a regular file, or null for anything else (folders, missing files). */
   fileSize(path: string): Promise<number | null>
-  readFile(path: string): Promise<Buffer>
+  /** Reads a file, but never more than maxBytes + 1 bytes (enough to see it's too big). */
+  readFile(path: string, maxBytes: number): Promise<Buffer>
   /** Locale for dates in quote lines, the same the UI uses. */
   locale?: string
   now?: () => Date
@@ -121,8 +122,8 @@ export class ComposeService implements ComposeApi {
     return added
   }
 
-  async discard(draft: Draft) {
-    this.attachments.release(draft.attachments.map((a) => a.id))
+  async releaseAttachments(ids: string[]) {
+    this.attachments.release(ids)
   }
 
   async send(draft: Draft): Promise<SendResult> {
@@ -147,20 +148,25 @@ export class ComposeService implements ComposeApi {
     const entries = this.attachments.resolve(draft.attachments.map((a) => a.id))
     if (!entries)
       throw new Error('An attachment is no longer available. Remove it and add it again.')
-    const total = entries.reduce((sum, e) => sum + e.attachment.size, 0)
-    if (total > MAX_ATTACHMENT_BYTES) {
-      throw new Error(
+    const tooBig = (total: number) =>
+      new Error(
         `The attachments add up to ${formatSize(total)}; the limit is ${formatSize(MAX_ATTACHMENT_BYTES)}, because most mail servers accept about 25 MB per message.`,
       )
-    }
+    const listed = entries.reduce((sum, e) => sum + e.attachment.size, 0)
+    if (listed > MAX_ATTACHMENT_BYTES) throw tooBig(listed)
     const attachments: OutgoingAttachment[] = []
+    let total = 0
     for (const { attachment, source } of entries) {
       if (source.kind === 'file') {
-        const content = await this.deps.readFile(source.path).catch(() => {
+        // Files can grow after they were picked; read no more than the limit allows.
+        const remaining = MAX_ATTACHMENT_BYTES - total
+        const content = await this.deps.readFile(source.path, remaining).catch(() => {
           throw new Error(
             `"${attachment.filename}" can't be read anymore. Remove it and add it again.`,
           )
         })
+        total += content.length
+        if (total > MAX_ATTACHMENT_BYTES) throw tooBig(total)
         attachments.push({ filename: attachment.filename, content })
       } else {
         const sourceProvider = await this.deps.source.provider(source.accountId)
@@ -168,6 +174,8 @@ export class ComposeService implements ComposeApi {
           decodeMessageId(source.messageId),
           source.attachmentId,
         )
+        total += content.content.length
+        if (total > MAX_ATTACHMENT_BYTES) throw tooBig(total)
         attachments.push({
           filename: attachment.filename,
           content: content.content,
@@ -203,7 +211,7 @@ export class ComposeService implements ComposeApi {
       messageId,
     })
 
-    const copy = await provider.send({
+    const { copy, rejected } = await provider.send({
       envelope: { from: account.email, to: everyone.map((a) => a.email) },
       raw,
       sentCopy,
@@ -219,6 +227,6 @@ export class ComposeService implements ComposeApi {
     }
     if (copy.saved)
       void this.deps.mail.syncFolder(draft.accountId, copy.folderId).catch(() => undefined)
-    return { status: 'sent', copySaved: copy.saved }
+    return { status: 'sent', copySaved: copy.saved, rejected }
   }
 }

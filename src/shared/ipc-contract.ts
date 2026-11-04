@@ -71,8 +71,8 @@ export interface ComposeApi {
   addAttachments(): Promise<DraftAttachment[]>
   /** Sends the draft and saves a copy in the Sent folder. */
   send(draft: Draft): Promise<SendResult>
-  /** Forgets attachment tokens of a discarded draft. */
-  discard(draft: Draft): Promise<void>
+  /** Forgets attachment tokens: of a removed attachment, or of a draft that was discarded. */
+  releaseAttachments(ids: string[]): Promise<void>
 }
 
 export interface Api {
@@ -95,7 +95,7 @@ export const API_METHODS = {
     'openAttachment',
     'saveAttachment',
   ],
-  compose: ['prepare', 'addAttachments', 'send', 'discard'],
+  compose: ['prepare', 'addAttachments', 'send', 'releaseAttachments'],
 } as const satisfies { [N in Namespace]: readonly (keyof Api[N])[] }
 
 /**

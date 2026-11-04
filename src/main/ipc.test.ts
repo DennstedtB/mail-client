@@ -41,7 +41,7 @@ function createFakeApi() {
     prepare: vi.fn(async () => ({})),
     addAttachments: vi.fn(async () => []),
     send: vi.fn(async () => ({ status: 'sent', copySaved: true })),
-    discard: vi.fn(async () => undefined),
+    releaseAttachments: vi.fn(async () => undefined),
   }
   return { app, accounts, mail, compose } as const
 }

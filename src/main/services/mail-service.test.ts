@@ -200,6 +200,41 @@ describe('MailService', () => {
     expect(emitted).toContainEqual({ accountId: MOCK_ACCOUNT_ID, folderId: 'inbox' })
   })
 
+  it('updates the cache before the server answers', async () => {
+    const provider = new MockMailProvider()
+    let answer!: () => void
+    const held = new Promise<void>((resolve) => (answer = resolve))
+    vi.spyOn(provider, 'setFlags').mockImplementation(() => held)
+    const mail = service([provider])
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+    const unread = (await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')).find((m) => !m.isRead)!
+    emitted = []
+    const change = mail.setFlags(MOCK_ACCOUNT_ID, [unread.id], { seen: true })
+    await vi.waitFor(() => expect(emitted.length).toBeGreaterThan(0))
+    const during = (await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')).find(
+      (m) => m.id === unread.id,
+    )
+    expect(during?.isRead).toBe(true)
+    answer()
+    await change
+  })
+
+  it('puts the previous flags back when the server refuses, even if the sync fails too', async () => {
+    const provider = new MockMailProvider()
+    const mail = service([provider])
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+    vi.spyOn(provider, 'setFlags').mockRejectedValue(new Error('Server says no'))
+    vi.spyOn(provider, 'syncFolder').mockRejectedValue(new Error('offline'))
+    const unread = (await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')).find((m) => !m.isRead)!
+    await expect(mail.setFlags(MOCK_ACCOUNT_ID, [unread.id], { seen: true })).rejects.toThrow(
+      'Server says no',
+    )
+    const after = (await mail.listMessages(MOCK_ACCOUNT_ID, 'inbox')).find(
+      (m) => m.id === unread.id,
+    )
+    expect(after?.isRead).toBe(false)
+  })
+
   it('puts flags back from the server when it refuses a change', async () => {
     const provider = new MockMailProvider()
     vi.spyOn(provider, 'setFlags').mockRejectedValue(new Error('Server says no'))

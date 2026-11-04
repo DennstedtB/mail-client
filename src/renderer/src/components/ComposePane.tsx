@@ -11,12 +11,19 @@ import { ToolbarButton } from './ToolbarButton'
 
 const api = window.api
 
-export type ComposeOutcome = { type: 'sent'; copySaved: boolean } | { type: 'discarded' }
+export interface SentInfo {
+  copySaved: boolean
+  /** Recipients the server refused. */
+  rejected: string[]
+}
 
 interface ComposePaneProps {
   initial: Draft
   account: Account
-  onClose: (outcome: ComposeOutcome) => void
+  /** The message went out. Also called if the pane was closed while it was sending. */
+  onSent: (info: SentInfo) => void
+  /** Sent or discarded: the pane should go. Only called while the pane is shown. */
+  onClose: () => void
   /** Tells the app whether closing the pane would lose changes. */
   onChangedChange: (changed: boolean) => void
 }
@@ -30,7 +37,13 @@ type SendState =
 const LABELS: Record<DraftField, string> = { to: 'To', cc: 'Cc', bcc: 'Bcc' }
 
 /** Writing a message: replaces the reading pane until it's sent or discarded. */
-export function ComposePane({ initial, account, onClose, onChangedChange }: ComposePaneProps) {
+export function ComposePane({
+  initial,
+  account,
+  onSent,
+  onClose,
+  onChangedChange,
+}: ComposePaneProps) {
   const [draft, setDraft] = useState(initial)
   const [state, setState] = useState<SendState>({ status: 'idle' })
   const [attachError, setAttachError] = useState<string | null>(null)
@@ -51,12 +64,14 @@ export function ComposePane({ initial, account, onClose, onChangedChange }: Comp
     latest.current = draft
   }, [draft])
   const sent = useRef(false)
-  useEffect(
-    () => () => {
-      if (!sent.current) void api.compose.discard(latest.current).catch(() => undefined)
-    },
-    [],
-  )
+  const mounted = useRef(false)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      if (!sent.current) release(latest.current.attachments.map((a) => a.id))
+    }
+  }, [])
 
   useEffect(() => {
     const target = fields.current[initialFocus(initial)]
@@ -66,6 +81,8 @@ export function ComposePane({ initial, account, onClose, onChangedChange }: Comp
   }, [initial])
 
   function update(patch: Partial<Draft>) {
+    // While sending, the draft stays as it was sent.
+    if (sending) return
     setDraft((d) => ({ ...d, ...patch }))
     if (state.status === 'invalid' || state.status === 'error') setState({ status: 'idle' })
   }
@@ -83,9 +100,11 @@ export function ComposePane({ initial, account, onClose, onChangedChange }: Comp
         return
       }
       sent.current = true
-      onClose({ type: 'sent', copySaved: result.copySaved })
+      onSent({ copySaved: result.copySaved, rejected: result.rejected })
+      // A pane that was closed meanwhile mustn't close whatever is shown now.
+      if (mounted.current) onClose()
     } catch (error) {
-      setState({ status: 'error', message: errorMessage(error) })
+      if (mounted.current) setState({ status: 'error', message: errorMessage(error) })
     }
   }
 
@@ -93,6 +112,7 @@ export function ComposePane({ initial, account, onClose, onChangedChange }: Comp
     setAttachError(null)
     try {
       const added = await api.compose.addAttachments()
+      if (!mounted.current) return release(added.map((a) => a.id))
       if (added.length > 0) setDraft((d) => ({ ...d, attachments: [...d.attachments, ...added] }))
     } catch (error) {
       setAttachError(`Files could not be attached: ${errorMessage(error)}`)
@@ -100,7 +120,13 @@ export function ComposePane({ initial, account, onClose, onChangedChange }: Comp
   }
 
   function discard() {
-    onClose({ type: 'discarded' })
+    onClose()
+  }
+
+  function removeAttachment(id: string) {
+    if (sending) return
+    update({ attachments: draft.attachments.filter((a) => a.id !== id) })
+    release([id])
   }
 
   function handleKeyDown(event: KeyboardEvent) {
@@ -122,6 +148,7 @@ export function ComposePane({ initial, account, onClose, onChangedChange }: Comp
         }}
         type="text"
         value={draft[field]}
+        readOnly={sending}
         onChange={(e) => update({ [field]: e.target.value })}
         aria-label={LABELS[field]}
         aria-invalid={(state.status === 'invalid' && state.field === field) || undefined}
@@ -166,7 +193,12 @@ export function ComposePane({ initial, account, onClose, onChangedChange }: Comp
           )}
           {sending ? 'Sending…' : 'Send'}
         </button>
-        <ToolbarButton icon={Paperclip} label="Attach files" onClick={() => void attach()} />
+        <ToolbarButton
+          icon={Paperclip}
+          label="Attach files"
+          unavailableReason={sending ? 'sending' : undefined}
+          onClick={() => void attach()}
+        />
         <h2 id={titleId} className="mx-3 min-w-0 flex-1 truncate text-[13px] text-ink-muted">
           {composeTitle(draft)}
         </h2>
@@ -202,6 +234,7 @@ export function ComposePane({ initial, account, onClose, onChangedChange }: Comp
             }}
             type="text"
             value={draft.subject}
+            readOnly={sending}
             onChange={(e) => update({ subject: e.target.value })}
             aria-label="Subject"
             className="min-w-0 flex-1 bg-transparent py-2 text-[14px] font-semibold outline-none"
@@ -230,9 +263,7 @@ export function ComposePane({ initial, account, onClose, onChangedChange }: Comp
                     </span>
                     <button
                       type="button"
-                      onClick={() =>
-                        update({ attachments: draft.attachments.filter((x) => x.id !== a.id) })
-                      }
+                      onClick={() => removeAttachment(a.id)}
                       aria-label={`Remove ${a.filename}`}
                       title="Remove"
                       className="grid size-5 shrink-0 place-items-center rounded text-ink-muted hover:bg-ink/8 hover:text-ink"
@@ -256,6 +287,7 @@ export function ComposePane({ initial, account, onClose, onChangedChange }: Comp
             fields.current.body = el ?? undefined
           }}
           value={draft.body}
+          readOnly={sending}
           onChange={(e) => update({ body: e.target.value })}
           aria-label="Message"
           className="selectable min-h-0 flex-1 resize-none bg-transparent pt-5 pb-16 font-serif text-[16.5px] leading-[1.65] outline-none"
@@ -296,4 +328,9 @@ function FieldRow({
       )}
     </div>
   )
+}
+
+/** Tells the main process to forget attachment tokens that are no longer needed. */
+function release(ids: string[]) {
+  if (ids.length > 0) void api.compose.releaseAttachments(ids).catch(() => undefined)
 }

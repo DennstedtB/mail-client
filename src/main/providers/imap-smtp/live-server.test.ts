@@ -123,13 +123,14 @@ describe.runIf(password)('local test server', () => {
       const raw = Buffer.from(
         `From: ${user}\r\nTo: ${user}\r\nSubject: ${subject}\r\nMessage-ID: ${messageId}\r\n\r\nHello\r\n`,
       )
-      const copy = await provider.send({
+      const { copy, rejected } = await provider.send({
         envelope: { from: user, to: [user] },
         raw,
         sentCopy: raw,
         messageId,
       })
       expect(copy).toMatchObject({ saved: true })
+      expect(rejected).toEqual([])
       const sentFolder = copy.saved ? copy.folderId : ''
       await provider.syncFolder(sentFolder, cache)
       const inSent = cache.listMessages(account.id, sentFolder).filter((m) => m.subject === subject)
