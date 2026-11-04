@@ -38,7 +38,22 @@ const FORBID_TAGS = [
 ]
 
 const REMOTE_URL = /^\s*(https?:)?\/\//i
-const REMOTE_IN_CSS = /url\(\s*['"]?\s*(https?:)?\/\//i
+const REMOTE_IN_CSS = /(url\(|@import)\s*['"]?\s*(https?:)?\/\//i
+const CSS_ESCAPE = /\\([0-9a-f]{1,6})\s?|\\([^\n])/gi
+const CSS_COMMENT = /\/\*[\s\S]*?\*\//g
+
+/** CSS as the browser reads it: escapes like `h\74 tps` decoded, comments removed. */
+export function normalizeCss(css: string): string {
+  return css
+    .replace(CSS_ESCAPE, (_, hex: string | undefined, char: string | undefined) => {
+      if (char !== undefined) return char
+      const code = parseInt(hex ?? '', 16)
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '\ufffd'
+    })
+    .replace(CSS_COMMENT, '')
+}
+
+const cssIsRemote = (css: string) => REMOTE_IN_CSS.test(normalizeCss(css))
 const URL_ATTRIBUTES = ['src', 'srcset', 'background', 'poster']
 
 /** Neutral defaults, white like paper: most HTML mail is designed for a white background. */
@@ -76,8 +91,8 @@ function refersToRemoteContent(root: Element): boolean {
       const value = element.getAttribute(name)
       if (value && value.split(',').some((part) => REMOTE_URL.test(part))) return true
     }
-    if (REMOTE_IN_CSS.test(element.getAttribute('style') ?? '')) return true
-    if (element.tagName === 'STYLE' && REMOTE_IN_CSS.test(element.textContent ?? '')) return true
+    if (cssIsRemote(element.getAttribute('style') ?? '')) return true
+    if (element.tagName === 'STYLE' && cssIsRemote(element.textContent ?? '')) return true
   }
   return false
 }

@@ -78,6 +78,31 @@ describe('parseMessage', () => {
     ])
   })
 
+  it('lists a related image that is explicitly an attachment', async () => {
+    const source = mime([
+      'From: bob@mailclient.test',
+      'Subject: Photo',
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/related; boundary="rel"',
+      '',
+      '--rel',
+      'Content-Type: text/html; charset=utf-8',
+      '',
+      '<p>No image reference here.</p>',
+      '--rel',
+      'Content-Type: image/png; name="photo.png"',
+      'Content-ID: <photo@x>',
+      'Content-Disposition: attachment; filename="photo.png"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      PNG_1PX,
+      '--rel--',
+      '',
+    ])
+    const message = await parseMessage(source)
+    expect(message.attachments.map((a) => a.filename)).toEqual(['photo.png'])
+  })
+
   it('handles a plain text message without attachments', async () => {
     const message = await parseMessage(
       mime(['From: a@example.org', 'Subject: Hi', '', 'Just text.', '']),

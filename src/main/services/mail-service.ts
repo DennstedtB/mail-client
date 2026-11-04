@@ -17,6 +17,15 @@ import type { AttachmentFiles } from './attachment-files'
 /** Bodies of the newest messages are downloaded in the background, so they open at once. */
 export const PREFETCH = { count: 25, maxSize: 2 * 1024 * 1024 } as const
 
+/** When a sync for new mail fails, it is tried again after this long. */
+export const WATCH_RETRY_MS = 30_000
+
+interface RunningSync {
+  promise: Promise<void>
+  /** Someone asked again while it ran; changes may have arrived after it looked. */
+  again: boolean
+}
+
 export interface MailServiceDeps {
   source: MailProviderSource
   cache: MailCache
@@ -46,8 +55,9 @@ export function toSummary(accountId: AccountId, row: CachedRow): MessageSummary 
  * cache, providers keep the cache in step with the servers.
  */
 export class MailService implements MailApi {
-  private readonly syncs = new Map<string, Promise<void>>()
+  private readonly syncs = new Map<string, RunningSync>()
   private readonly watchers = new Map<AccountId, () => void>()
+  private readonly retries = new Map<string, NodeJS.Timeout>()
 
   constructor(private readonly deps: MailServiceDeps) {}
 
@@ -60,15 +70,31 @@ export class MailService implements MailApi {
     return this.deps.cache.listMessages(accountId, folderId).map((row) => toSummary(accountId, row))
   }
 
-  /** One sync per folder at a time; a second request joins the running one. */
+  /**
+   * One sync per folder at a time. A request that arrives while one runs
+   * joins it, and the folder is synced once more afterwards, so nothing that
+   * arrived in between is missed.
+   */
   syncFolder(accountId: AccountId, folderId: FolderId): Promise<void> {
     const key = JSON.stringify([accountId, folderId])
-    let running = this.syncs.get(key)
-    if (!running) {
-      running = this.runSync(accountId, folderId).finally(() => this.syncs.delete(key))
-      this.syncs.set(key, running)
+    const running = this.syncs.get(key)
+    if (running) {
+      running.again = true
+      return running.promise
     }
-    return running
+    const entry: RunningSync = { promise: Promise.resolve(), again: false }
+    entry.promise = (async () => {
+      try {
+        do {
+          entry.again = false
+          await this.runSync(accountId, folderId)
+        } while (entry.again)
+      } finally {
+        this.syncs.delete(key)
+      }
+    })()
+    this.syncs.set(key, entry)
+    return entry.promise
   }
 
   private async runSync(accountId: AccountId, folderId: FolderId) {
@@ -206,17 +232,38 @@ export class MailService implements MailApi {
       if (this.watchers.has(accountId)) continue
       this.watchers.set(
         accountId,
-        provider.watch((folderId) => {
-          this.syncFolder(accountId, folderId).catch(() => undefined)
-        }),
+        provider.watch((folderId) => this.syncForWatcher(accountId, folderId)),
       )
     }
+  }
+
+  /** A sync that new mail asked for; if it fails, it's tried again a little later. */
+  private syncForWatcher(accountId: AccountId, folderId: FolderId) {
+    const key = JSON.stringify([accountId, folderId])
+    clearTimeout(this.retries.get(key))
+    this.retries.delete(key)
+    this.syncFolder(accountId, folderId).catch(() => {
+      if (!this.watchers.has(accountId)) return
+      this.retries.set(
+        key,
+        setTimeout(() => {
+          this.retries.delete(key)
+          this.syncForWatcher(accountId, folderId)
+        }, WATCH_RETRY_MS),
+      )
+    })
   }
 
   /** Stops watching a removed account and drops its cache. */
   forget(accountId: AccountId) {
     this.watchers.get(accountId)?.()
     this.watchers.delete(accountId)
+    for (const [key, timer] of this.retries) {
+      if ((JSON.parse(key) as [string, string])[0] === accountId) {
+        clearTimeout(timer)
+        this.retries.delete(key)
+      }
+    }
     this.deps.cache.deleteAccount(accountId)
   }
 

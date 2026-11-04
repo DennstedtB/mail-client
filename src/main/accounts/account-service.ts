@@ -103,7 +103,11 @@ export class AccountService implements AccountsApi, MailProviderSource {
       this.accounts = Promise.resolve(remaining)
       const provider = this.providers.get(accountId)
       this.providers.delete(accountId)
-      this.deps.onChange?.({ type: 'removed', accountId })
+      try {
+        this.deps.onChange?.({ type: 'removed', accountId })
+      } catch {
+        // Cache cleanup must not stop the password deletion below.
+      }
       await provider?.close().catch(() => undefined)
       await this.deps.secrets.delete(accountId)
     })

@@ -23,9 +23,22 @@ export interface AttachmentContent {
   content: Buffer
 }
 
+/** True if the part says `Content-Disposition: attachment` itself (mailparser defaults to it). */
+function isExplicitAttachment(attachment: ParsedAttachment): boolean {
+  const header: unknown = attachment.headers.get('content-disposition')
+  const value =
+    typeof header === 'string'
+      ? header
+      : typeof header === 'object' && header !== null && 'value' in header
+        ? String(header.value)
+        : ''
+  return value.trim().toLowerCase() === 'attachment'
+}
+
 /** Inline images that the HTML already shows are not listed as attachments. */
 function isVisibleAttachment(attachment: ParsedAttachment): boolean {
-  return !(attachment.related && attachment.contentType.startsWith('image/'))
+  const inlineImage = attachment.related && attachment.contentType.startsWith('image/')
+  return !inlineImage || isExplicitAttachment(attachment)
 }
 
 function fallbackName(attachment: ParsedAttachment, index: number): string {

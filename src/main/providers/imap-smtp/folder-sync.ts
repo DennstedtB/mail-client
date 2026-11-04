@@ -10,13 +10,19 @@ import type { CachedEnvelope, CachedFlags, MailCache } from '../../cache/mail-ca
 /** How many of the newest messages a folder starts with in the cache. */
 export const INITIAL_WINDOW = 300
 
-/** True if any leaf part is meant as a file: an attachment, or a named non-text part. */
+/** Types mailparser treats as message text unless they are explicitly attachments. */
+const BODY_TYPES = ['text/plain', 'text/html', 'message/delivery-status']
+
+/**
+ * True if any leaf part is meant as a file: an attachment, or a named part
+ * that isn't message text (the same rule mailparser uses for the attachment list).
+ */
 export function hasAttachmentParts(node: MessageStructureObject | undefined): boolean {
   if (!node) return false
   if (node.childNodes?.length) return node.childNodes.some(hasAttachmentParts)
   if (node.disposition === 'attachment') return true
   const named = Boolean(node.dispositionParameters?.['filename'] || node.parameters?.['name'])
-  return named && !node.type.startsWith('text/') && node.disposition !== 'inline'
+  return named && !BODY_TYPES.includes(node.type.toLowerCase()) && node.disposition !== 'inline'
 }
 
 function toAddress(value: MessageAddressObject | undefined): Address | undefined {

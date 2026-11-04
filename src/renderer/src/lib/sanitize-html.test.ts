@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { linkify, prepareHtml, splitQuotes } from './sanitize-html'
+import { linkify, normalizeCss, prepareHtml, splitQuotes } from './sanitize-html'
 
 function prepare(html: string, allowRemoteImages = false) {
   return prepareHtml(html, { allowRemoteImages })
@@ -72,6 +72,21 @@ describe('prepareHtml', () => {
     )
     expect(
       prepare('<p>Plain <b>HTML</b></p><img src="data:image/png;base64,AAAA">').hasRemoteContent,
+    ).toBe(false)
+  })
+
+  it('sees remote URLs hidden behind CSS escapes and comments', () => {
+    expect(
+      prepare('<div style="background:url(h\\74 tps://x.example/a.png)">x</div>').hasRemoteContent,
+    ).toBe(true)
+    expect(
+      prepare(
+        '<style>@import "https://x.example/a.css"; p{background:u\\rl(/**/"//x.example/b")}</style>',
+      ).hasRemoteContent,
+    ).toBe(true)
+    expect(normalizeCss('url(h\\74 tps://x)')).toBe('url(https://x)')
+    expect(
+      prepare('<div style="background:url(data:image/png;base64,AA)">x</div>').hasRemoteContent,
     ).toBe(false)
   })
 })

@@ -93,12 +93,13 @@ describe('MailCache', () => {
     expect(cache.listMessages('a', 'INBOX')).toEqual([])
   })
 
-  it('updating a message keeps its body and indexes it only once', () => {
+  it('updating a message keeps its body, indexed once and still searchable', () => {
     cache.upsertMessages('a', 'INBOX', [envelope(1, { subject: 'Report' })])
     cache.setBody('a', 'INBOX', 1, body)
     cache.upsertMessages('a', 'INBOX', [envelope(1, { subject: 'Report', seen: true })])
     expect(cache.getBody('a', 'INBOX', 1)).not.toBeNull()
     expect(cache.search('a', 'report')).toHaveLength(1)
+    expect(cache.search('a', 'quartals').map((m) => m.uid)).toEqual([1])
   })
 
   it('forgets everything about a removed account', () => {
