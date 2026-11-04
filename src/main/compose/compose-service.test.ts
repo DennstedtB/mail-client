@@ -29,6 +29,7 @@ const ROW: CachedRow = {
   flagged: false,
   answered: false,
   hasAttachments: true,
+  attachmentNames: ['report.pdf'],
   size: 1000,
   preview: 'Shall we?',
 }

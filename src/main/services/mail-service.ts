@@ -1,4 +1,5 @@
 import type { MailApi } from '@shared/ipc-contract'
+import { parseSearch } from '@shared/search-query'
 import type {
   AccountId,
   FlagChange,
@@ -65,7 +66,17 @@ export class MailService implements MailApi {
   constructor(private readonly deps: MailServiceDeps) {}
 
   async listFolders(accountId: AccountId): Promise<Folder[]> {
-    return (await this.provider(accountId)).listFolders()
+    return this.fetchFolders(await this.provider(accountId))
+  }
+
+  /** Lists folders from the server and keeps a copy, so search can find them by name offline. */
+  private async fetchFolders(provider: MailProvider): Promise<Folder[]> {
+    const folders = await provider.listFolders()
+    this.deps.cache.setFolders(
+      provider.account.id,
+      folders.map(({ id, name, role }) => ({ id, name, role })),
+    )
+    return folders
   }
 
   async listMessages(accountId: AccountId, folderId: FolderId): Promise<MessageSummary[]> {
@@ -290,7 +301,10 @@ export class MailService implements MailApi {
 
   async search(accountId: AccountId, query: string): Promise<MessageSummary[]> {
     await this.provider(accountId)
-    return this.deps.cache.search(accountId, query).map((row) => toSummary(accountId, row))
+    // The UI shows the problems of a search (it parses the same way) instead of running it.
+    const { node, problems } = parseSearch(query)
+    if (!node || problems.length > 0) return []
+    return this.deps.cache.search(accountId, node).map((row) => toSummary(accountId, row))
   }
 
   /** Starts watching every account that isn't watched yet (new mail → sync → UI update). */
@@ -315,7 +329,7 @@ export class MailService implements MailApi {
     const accountId = provider.account.id
     let folders: Folder[]
     try {
-      folders = await provider.listFolders()
+      folders = await this.fetchFolders(provider)
     } catch {
       return
     }

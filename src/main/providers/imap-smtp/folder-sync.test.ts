@@ -1,6 +1,6 @@
 import type { MessageStructureObject } from 'imapflow'
 import { describe, expect, it } from 'vitest'
-import { hasAttachmentParts } from './folder-sync'
+import { attachmentNames, hasAttachmentParts } from './folder-sync'
 
 function leaf(
   type: string,
@@ -43,5 +43,33 @@ describe('hasAttachmentParts', () => {
       hasAttachmentParts(mixed(leaf('image/png', { name: 'logo.png', disposition: 'inline' }))),
     ).toBe(false)
     expect(hasAttachmentParts(undefined)).toBe(false)
+  })
+})
+
+describe('attachmentNames', () => {
+  it('lists the names of attachments, nested parts included', () => {
+    const named = (name: string) =>
+      ({
+        part: '2',
+        type: 'application/pdf',
+        disposition: 'attachment',
+        dispositionParameters: { filename: ` ${name} ` },
+      }) as MessageStructureObject
+    expect(
+      attachmentNames(
+        mixed(
+          leaf('text/plain', { name: 'body.txt' }),
+          mixed(named('Rechnung März.pdf'), leaf('text/csv', { name: 'data.csv' })),
+          leaf('image/png', { name: 'logo.png', disposition: 'inline' }),
+        ),
+      ),
+    ).toEqual(['Rechnung März.pdf', 'data.csv'])
+  })
+
+  it('skips attachments without a name', () => {
+    expect(attachmentNames(mixed(leaf('application/pdf', { disposition: 'attachment' })))).toEqual(
+      [],
+    )
+    expect(attachmentNames(undefined)).toEqual([])
   })
 })

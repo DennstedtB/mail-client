@@ -335,6 +335,20 @@ describe('MailService', () => {
     expect(await mail.search(MOCK_ACCOUNT_ID, '   ')).toEqual([])
   })
 
+  it('finds folders by role once they were listed, and runs no search with problems', async () => {
+    const mail = service([new MockMailProvider()])
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'inbox')
+    await mail.syncFolder(MOCK_ACCOUNT_ID, 'sent')
+    await mail.listFolders(MOCK_ACCOUNT_ID)
+    const sent = await mail.listMessages(MOCK_ACCOUNT_ID, 'sent')
+    const found = await mail.search(MOCK_ACCOUNT_ID, 'in:sent')
+    expect(found.map((m) => m.id).sort()).toEqual(sent.map((m) => m.id).sort())
+    expect(found.length).toBeGreaterThan(0)
+
+    expect(await mail.search(MOCK_ACCOUNT_ID, 'in:sent is:soon')).toEqual([])
+    expect(await mail.search(MOCK_ACCOUNT_ID, 'from:')).toEqual([])
+  })
+
   it('rejects unknown accounts with a clear error', async () => {
     const mail = service([new MockMailProvider()])
     await expect(mail.listFolders('nope')).rejects.toThrow('Unknown account: nope')

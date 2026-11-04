@@ -72,7 +72,12 @@ export interface MailApi {
   deleteMessages(accountId: AccountId, messageIds: MessageId[]): Promise<void>
   /** Creates a top-level folder, e.g. "Archive" on servers that have none. Returns its id. */
   createFolder(accountId: AccountId, name: string): Promise<FolderId>
-  /** Searches subject, people and downloaded message text in all folders of an account. */
+  /**
+   * Searches all folders of an account, in the search language of
+   * `search-query.ts` (words, "phrases", from:, is:unread, OR, -, …). Covers
+   * subject, people, attachment names and downloaded message text. A search
+   * with problems (see `parseSearch`) finds nothing; the UI shows them instead.
+   */
   search(accountId: AccountId, query: string): Promise<MessageSummary[]>
 }
 

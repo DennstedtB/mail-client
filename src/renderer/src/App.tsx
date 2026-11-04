@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react'
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
+import { parseSearch, searchTerms } from '@shared/search-query'
 import type { ComposeKind, Draft } from '@shared/types/compose'
 import type { Account, Folder, Message, MessageId, MessageSummary } from '@shared/types/mail'
 import { AddAccountDialog } from './components/AddAccountDialog'
@@ -154,11 +155,18 @@ export function App() {
     syncResult && syncResult.key === syncKey ? syncResult.state : { status: 'running' }
 
   // The list shows search results (all folders of the account) or the selected folder.
-  const searchAccountId = searchQuery && selection ? selection.accountId : null
+  // A search runs only once it has something to look for and no problems; the
+  // main process parses it the same way.
+  const parsedSearch = useMemo(() => parseSearch(searchQuery), [searchQuery])
+  const searching = Boolean(searchQuery && selection)
+  const searchAccountId =
+    searching && parsedSearch.node && parsedSearch.problems.length === 0
+      ? selection!.accountId
+      : null
   const messages = useAsync(
     searchAccountId
       ? `search:${searchAccountId}:${searchQuery}:${mailVersion}`
-      : folder
+      : folder && !searching
         ? `messages:${folder.accountId}:${folder.id}:${mailVersion}`
         : null,
     () =>
@@ -363,7 +371,10 @@ export function App() {
                 // Clearing returns to the folder at once, without waiting for the pause.
                 if (!text.trim()) setSearchQuery('')
               },
-              active: Boolean(searchAccountId),
+              active: searching,
+              problems: parsedSearch.problems,
+              incomplete: searching && parsedSearch.node === null,
+              inAllFolders: !searchTerms(parsedSearch.node).some((t) => t.kind === 'folder'),
               folderName: (id) => accountFolderList.find((f) => f.id === id)?.name,
             }}
           />

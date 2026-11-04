@@ -1,19 +1,27 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
+import type { SearchNode } from '@shared/search-query'
 import {
   MESSAGE_LIST_LIMIT,
+  SEARCH_RESULT_LIMIT,
   type AccountId,
   type Address,
   type Attachment,
   type FolderId,
+  type FolderRole,
 } from '@shared/types/mail'
+import { searchCondition, type SearchFolder } from './search-sql'
 
 /**
  * The local copy of message lists and bodies (node:sqlite, built into
  * Electron's Node; no native module). It is only a cache: the schema version
  * is checked on open, and a mismatch simply rebuilds it from the server.
  */
-/** 2: bodies keep Reply-To (M3). A different version rebuilds the cache from the servers. */
-const SCHEMA_VERSION = 2
+/**
+ * 2: bodies keep Reply-To (M3). 3: search operators: folders, attachment
+ * names, To and Cc indexed apart, and the search index keyed by message id.
+ * A different version rebuilds the cache from the servers.
+ */
+const SCHEMA_VERSION = 3
 
 const SCHEMA = `
 CREATE TABLE folder_state (
@@ -24,6 +32,7 @@ CREATE TABLE folder_state (
   PRIMARY KEY (account_id, folder)
 );
 CREATE TABLE messages (
+  id INTEGER PRIMARY KEY,
   account_id TEXT NOT NULL,
   folder TEXT NOT NULL,
   uid INTEGER NOT NULL,
@@ -39,8 +48,9 @@ CREATE TABLE messages (
   answered INTEGER NOT NULL,
   has_attachments INTEGER NOT NULL,
   size INTEGER NOT NULL,
+  attachment_names_json TEXT NOT NULL DEFAULT '[]',
   preview TEXT NOT NULL DEFAULT '',
-  PRIMARY KEY (account_id, folder, uid)
+  UNIQUE (account_id, folder, uid)
 );
 CREATE INDEX messages_by_date ON messages (account_id, folder, date DESC);
 CREATE TABLE bodies (
@@ -53,9 +63,16 @@ CREATE TABLE bodies (
   headers_json TEXT NOT NULL,
   PRIMARY KEY (account_id, folder, uid)
 );
+CREATE TABLE folders (
+  account_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  role TEXT NOT NULL,
+  PRIMARY KEY (account_id, id)
+);
+-- One row per message; its rowid is messages.id, so updates and searches find it by index.
 CREATE VIRTUAL TABLE message_search USING fts5(
-  account_id UNINDEXED, folder UNINDEXED, uid UNINDEXED,
-  subject, sender, recipients, body,
+  subject, sender, to_list, cc_list, body, filenames,
   tokenize = 'unicode61 remove_diacritics 2'
 );
 `
@@ -73,6 +90,8 @@ export interface CachedEnvelope {
   flagged: boolean
   answered: boolean
   hasAttachments: boolean
+  /** File names of the attachments, as far as the message structure tells; for search. */
+  attachmentNames: string[]
   size: number
 }
 
@@ -122,17 +141,6 @@ type Row = Record<string, SQLInputValue>
 
 function addressText(addresses: Address[]): string {
   return addresses.map((a) => [a.name, a.email].filter(Boolean).join(' ')).join(' ')
-}
-
-/** Turns free text into an FTS5 query: every word must match, as a prefix. */
-export function toSearchQuery(text: string): string | null {
-  const words = text
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}@._-]+/u)
-    .map((w) => w.replace(/"/g, ''))
-    .filter(Boolean)
-  if (words.length === 0) return null
-  return words.map((w) => `"${w}"*`).join(' ')
 }
 
 export class MailCache {
@@ -200,7 +208,13 @@ export class MailCache {
   /** Forgets everything about a folder, e.g. when its UIDVALIDITY changed. */
   resetFolder(accountId: AccountId, folder: FolderId) {
     this.transaction(() => {
-      for (const table of ['messages', 'bodies', 'folder_state', 'message_search']) {
+      this.db
+        .prepare(
+          `DELETE FROM message_search WHERE rowid IN
+            (SELECT id FROM messages WHERE account_id = ? AND folder = ?)`,
+        )
+        .run(accountId, folder)
+      for (const table of ['messages', 'bodies', 'folder_state']) {
         this.db
           .prepare(`DELETE FROM ${table} WHERE account_id = ? AND folder = ?`)
           .run(accountId, folder)
@@ -210,7 +224,12 @@ export class MailCache {
 
   deleteAccount(accountId: AccountId) {
     this.transaction(() => {
-      for (const table of ['messages', 'bodies', 'folder_state', 'message_search']) {
+      this.db
+        .prepare(
+          'DELETE FROM message_search WHERE rowid IN (SELECT id FROM messages WHERE account_id = ?)',
+        )
+        .run(accountId)
+      for (const table of ['messages', 'bodies', 'folder_state', 'folders']) {
         this.db.prepare(`DELETE FROM ${table} WHERE account_id = ?`).run(accountId)
       }
     })
@@ -220,20 +239,19 @@ export class MailCache {
     if (messages.length === 0) return
     const upsert = this.db.prepare(
       `INSERT INTO messages (account_id, folder, uid, message_id, subject, from_name, from_email, to_json, cc_json,
-         date, seen, flagged, answered, has_attachments, size)
+         date, seen, flagged, answered, has_attachments, size, attachment_names_json)
        VALUES (:account_id, :folder, :uid, :message_id, :subject, :from_name, :from_email, :to_json, :cc_json,
-         :date, :seen, :flagged, :answered, :has_attachments, :size)
+         :date, :seen, :flagged, :answered, :has_attachments, :size, :attachment_names_json)
        ON CONFLICT (account_id, folder, uid) DO UPDATE SET
-         seen = excluded.seen, flagged = excluded.flagged, answered = excluded.answered`,
+         seen = excluded.seen, flagged = excluded.flagged, answered = excluded.answered
+       RETURNING id`,
     )
-    const removeIndex = this.db.prepare(
-      'DELETE FROM message_search WHERE account_id = ? AND folder = ? AND uid = ?',
-    )
+    const removeIndex = this.db.prepare('DELETE FROM message_search WHERE rowid = ?')
     // The body text comes from a downloaded body, if there is one, so it stays searchable.
     const index = this.db.prepare(
-      `INSERT INTO message_search (account_id, folder, uid, subject, sender, recipients, body)
+      `INSERT INTO message_search (rowid, subject, sender, to_list, cc_list, filenames, body)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, coalesce(
-         (SELECT text FROM bodies WHERE account_id = ?1 AND folder = ?2 AND uid = ?3), ''))`,
+         (SELECT text FROM bodies WHERE account_id = ?7 AND folder = ?8 AND uid = ?9), ''))`,
     )
     this.transaction(() => {
       for (const m of messages) {
@@ -253,16 +271,20 @@ export class MailCache {
           answered: m.answered ? 1 : 0,
           has_attachments: m.hasAttachments ? 1 : 0,
           size: m.size,
+          attachment_names_json: JSON.stringify(m.attachmentNames),
         }
-        upsert.run(row)
-        removeIndex.run(accountId, folder, m.uid)
+        const { id } = upsert.get(row) as { id: number }
+        removeIndex.run(id)
         index.run(
+          id,
+          m.subject,
+          addressText([m.from]),
+          addressText(m.to),
+          addressText(m.cc),
+          m.attachmentNames.join('\n'),
           accountId,
           folder,
           m.uid,
-          m.subject,
-          addressText([m.from]),
-          addressText([...m.to, ...m.cc]),
         )
       }
     })
@@ -286,7 +308,12 @@ export class MailCache {
   removeMessages(accountId: AccountId, folder: FolderId, uids: number[]) {
     if (uids.length === 0) return
     this.transaction(() => {
-      for (const table of ['messages', 'bodies', 'message_search']) {
+      const removeIndex = this.db.prepare(
+        `DELETE FROM message_search WHERE rowid =
+          (SELECT id FROM messages WHERE account_id = ? AND folder = ? AND uid = ?)`,
+      )
+      for (const uid of uids) removeIndex.run(accountId, folder, uid)
+      for (const table of ['messages', 'bodies']) {
         const statement = this.db.prepare(
           `DELETE FROM ${table} WHERE account_id = ? AND folder = ? AND uid = ?`,
         )
@@ -383,7 +410,8 @@ export class MailCache {
         .run(body.preview, accountId, folder, uid)
       this.db
         .prepare(
-          'UPDATE message_search SET body = ? WHERE account_id = ? AND folder = ? AND uid = ?',
+          `UPDATE message_search SET body = ? WHERE rowid =
+            (SELECT id FROM messages WHERE account_id = ? AND folder = ? AND uid = ?)`,
         )
         .run(body.text, accountId, folder, uid)
     })
@@ -407,18 +435,36 @@ export class MailCache {
     return rows.map((r) => r.uid)
   }
 
-  /** Full-text search over subject, people and downloaded bodies of one account. */
-  search(accountId: AccountId, text: string, limit = 200): CachedRow[] {
-    const query = toSearchQuery(text)
-    if (!query) return []
+  /** Keeps the folder list of an account, so search can find folders by role or name offline. */
+  setFolders(accountId: AccountId, folders: SearchFolder[]) {
+    const insert = this.db.prepare(
+      'INSERT INTO folders (account_id, id, name, role) VALUES (?, ?, ?, ?)',
+    )
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM folders WHERE account_id = ?').run(accountId)
+      for (const f of folders) insert.run(accountId, f.id, f.name, f.role)
+    })
+  }
+
+  folders(accountId: AccountId): SearchFolder[] {
+    const rows = this.db
+      .prepare('SELECT id, name, role FROM folders WHERE account_id = ? ORDER BY id')
+      .all(accountId) as { id: string; name: string; role: FolderRole }[]
+    return rows.map(({ id, name, role }) => ({ id, name, role }))
+  }
+
+  /**
+   * Messages of one account, in all folders, that match a parsed search
+   * (src/shared/search-query.ts), newest first.
+   */
+  search(accountId: AccountId, search: SearchNode, limit = SEARCH_RESULT_LIMIT): CachedRow[] {
+    const condition = searchCondition(search, { folders: this.folders(accountId) })
     const rows = this.db
       .prepare(
-        `SELECT m.* FROM message_search s
-         JOIN messages m ON m.account_id = s.account_id AND m.folder = s.folder AND m.uid = s.uid
-         WHERE s.account_id = ? AND message_search MATCH ?
-         ORDER BY m.date DESC LIMIT ?`,
+        `SELECT m.* FROM messages m WHERE m.account_id = ? AND ${condition.sql}
+         ORDER BY m.date DESC, m.uid DESC LIMIT ?`,
       )
-      .all(accountId, query, limit) as Row[]
+      .all(accountId, ...condition.params, limit) as Row[]
     return rows.map(toCachedRow)
   }
 }
@@ -440,6 +486,7 @@ function toCachedRow(row: Row): CachedRow {
     flagged: row['flagged'] === 1,
     answered: row['answered'] === 1,
     hasAttachments: row['has_attachments'] === 1,
+    attachmentNames: JSON.parse(String(row['attachment_names_json'])) as string[],
     size: Number(row['size']),
     preview: String(row['preview']),
   }

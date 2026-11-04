@@ -37,7 +37,8 @@ Main-process modules:
 | `src/main/accounts/account-store.ts`    | Account settings in `accounts.json` (no passwords)                                                                                                                                                                   |
 | `src/main/accounts/secret-store.ts`     | Passwords in `credentials.json`, encrypted with `safeStorage` (Keychain key)                                                                                                                                         |
 | `src/main/providers/imap-smtp/`         | ImapFlow / Nodemailer: connection options, connection check, readable errors, folders (roles by SPECIAL-USE, else by name), folder sync, persistent connection + IDLE watcher, send + Sent copy, flags, move, delete |
-| `src/main/cache/mail-cache.ts`          | Local cache (`node:sqlite`, built into Electron): envelopes, flags, bodies, FTS5 search index. Rebuilt when the schema version changes                                                                               |
+| `src/main/cache/mail-cache.ts`          | Local cache (`node:sqlite`, built into Electron): envelopes, flags, bodies, folder list, FTS5 search index. Rebuilt when the schema version changes                                                                  |
+| `src/main/cache/search-sql.ts`          | Turns a parsed search into SQL over the cache: text terms through FTS5, everything else through columns of `messages`                                                                                                |
 | `src/main/mail/`                        | Message ids (`message-ref.ts`: folder + UID, opaque to the UI), parsing with mailparser (`parse-message.ts`)                                                                                                         |
 | `src/main/services/mail-service.ts`     | Mail part of the contract: lists from the cache, sync, body download and prefetch, watchers per account, flags / move / delete, search                                                                               |
 | `src/main/services/attachment-files.ts` | Opening (temp folder, never files that run code) and saving attachments                                                                                                                                              |
@@ -46,6 +47,17 @@ Main-process modules:
 | `src/main/storage/json-file.ts`         | Atomic JSON writes (0600), write queue                                                                                                                                                                               |
 
 Data lives in `app.getPath('userData')`, on macOS `~/Library/Application Support/MailClient`.
+
+### Search
+
+The search language lives in `src/shared/search-query.ts`: words (prefix match, every word needed), `"phrases"`, operators (`from:`, `to:`, `cc:`, `subject:`, `body:`, `filename:`, `in:`, `is:`, `has:`, `after:`, `before:`, `date:`, `newer_than:`, `older_than:`, `larger:`, `smaller:`), `-` to leave out, `OR` and brackets. `parseSearch()` turns the text into a tree of terms and lists problems ("before: needs a date …"). The UI parses to show problems and the search help (`components/SearchHelp.tsx`, built from `SEARCH_OPERATORS`); the main process parses again in `MailService.search` and runs nothing if there are problems. `search-sql.ts` turns each term into its own SQL condition, so NOT / AND / OR combine freely.
+
+- The FTS5 table `message_search` has one row per message, its `rowid` is `messages.id`; never look rows up by its other columns (FTS5 can't index them, so that scans the whole index).
+- Columns: `subject`, `sender`, `to_list`, `cc_list`, `body` (only downloaded bodies), `filenames` (from BODYSTRUCTURE at sync, so every message has them).
+- `in:` resolves roles and folder names against the `folders` table, which `MailService` refreshes whenever it lists folders.
+- Dates are local time; `after:` is inclusive, `before:` exclusive.
+
+To add an operator (e.g. `tag:` once messages have tags): add a term kind to `SearchTerm`, an entry to `SEARCH_OPERATORS` (it appears in the search help by itself; `values` feed the help and later completion), and its SQL in `TERM_SQL` in `search-sql.ts`; the type check fails until every term kind has SQL.
 
 ### Rules that keep the architecture intact
 
@@ -99,7 +111,7 @@ In use: ImapFlow 2 (IMAP), Nodemailer 10 (SMTP, MailComposer, addressparser), ma
 - [x] **M1 Account setup:** manual IMAP/SMTP configuration, connection check with readable errors, password in the Keychain, real folders with unread counts, one sidebar section per account, remove account
 - [x] **M2 Reading mail:** local cache, folder sync, message list and view, safe HTML rendering, attachments (open / save), push for new mail (IMAP IDLE)
 - [x] **M3 Writing mail:** compose, reply / forward, attachments, send, save to Sent
-- [x] **M4 Mail actions:** read / unread, flag, move, delete, local search
+- [x] **M4 Mail actions:** read / unread, flag, move, delete, local search with operators (`from:`, `is:unread`, `in:sent`, dates, `OR`, `-`, …) and a search help
 - [ ] **M5 Calendar:** CalDAV, day / week / month views, create / edit / delete events, show recurring events
 - [ ] **M6 Microsoft 365:** Entra app registration, MSAL sign-in, Graph mail and calendar providers
 - Later: multiple accounts and unified inbox, meeting invitations, editing recurring events, contacts, notifications, full-text search, signing and auto-update, Windows / Linux

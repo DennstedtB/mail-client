@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { MailCache, toSearchQuery, type CachedBody, type CachedEnvelope } from './mail-cache'
+import { parseSearch } from '@shared/search-query'
+import { MailCache, type CachedBody, type CachedEnvelope } from './mail-cache'
 
 function envelope(uid: number, overrides: Partial<CachedEnvelope> = {}): CachedEnvelope {
   return {
@@ -17,6 +18,7 @@ function envelope(uid: number, overrides: Partial<CachedEnvelope> = {}): CachedE
     flagged: false,
     answered: false,
     hasAttachments: false,
+    attachmentNames: [],
     size: 1000,
     ...overrides,
   }
@@ -37,6 +39,13 @@ beforeEach(() => {
   cache = new MailCache(':memory:')
 })
 afterEach(() => cache.close())
+
+/** UIDs of the messages a search finds, newest first. */
+function find(accountId: string, query: string, now?: Date): number[] {
+  const { node, problems } = parseSearch(query, { now })
+  if (!node || problems.length > 0) throw new Error(`Not a search: ${query}`)
+  return cache.search(accountId, node).map((m) => m.uid)
+}
 
 describe('MailCache', () => {
   it('lists messages of a folder newest first', () => {
@@ -74,11 +83,11 @@ describe('MailCache', () => {
     expect(cache.listMessages('a', 'INBOX').find((m) => m.uid === 1)?.preview).toBe(body.preview)
     expect(cache.uidsWithoutBody('a', 'INBOX', 10, 10_000)).toEqual([2])
 
-    expect(cache.search('a', 'quartals').map((m) => m.uid)).toEqual([1])
-    expect(cache.search('a', 'olpreis').map((m) => m.uid)).toEqual([1]) // diacritics ignored
-    expect(cache.search('a', 'lunch').map((m) => m.uid)).toEqual([2])
-    expect(cache.search('a', 'bob lunch').map((m) => m.uid)).toEqual([2])
-    expect(cache.search('b', 'lunch')).toEqual([])
+    expect(find('a', 'quartals')).toEqual([1])
+    expect(find('a', 'olpreis')).toEqual([1]) // diacritics ignored
+    expect(find('a', 'lunch')).toEqual([2])
+    expect(find('a', 'bob lunch')).toEqual([2])
+    expect(find('b', 'lunch')).toEqual([])
   })
 
   it('keeps the search index in step with removals and resets', () => {
@@ -87,9 +96,9 @@ describe('MailCache', () => {
       envelope(2, { subject: 'Alpha two' }),
     ])
     cache.removeMessages('a', 'INBOX', [1])
-    expect(cache.search('a', 'alpha').map((m) => m.uid)).toEqual([2])
+    expect(find('a', 'alpha')).toEqual([2])
     cache.resetFolder('a', 'INBOX')
-    expect(cache.search('a', 'alpha')).toEqual([])
+    expect(find('a', 'alpha')).toEqual([])
     expect(cache.listMessages('a', 'INBOX')).toEqual([])
   })
 
@@ -98,8 +107,8 @@ describe('MailCache', () => {
     cache.setBody('a', 'INBOX', 1, body)
     cache.upsertMessages('a', 'INBOX', [envelope(1, { subject: 'Report', seen: true })])
     expect(cache.getBody('a', 'INBOX', 1)).not.toBeNull()
-    expect(cache.search('a', 'report')).toHaveLength(1)
-    expect(cache.search('a', 'quartals').map((m) => m.uid)).toEqual([1])
+    expect(find('a', 'report')).toHaveLength(1)
+    expect(find('a', 'quartals')).toEqual([1])
   })
 
   it('forgets everything about a removed account', () => {
@@ -108,6 +117,120 @@ describe('MailCache', () => {
     cache.deleteAccount('a')
     expect(cache.listMessages('a', 'INBOX')).toEqual([])
     expect(cache.listMessages('b', 'INBOX')).toHaveLength(1)
+    expect(find('a', 'message')).toEqual([])
+    expect(find('b', 'message')).toEqual([1])
+  })
+})
+
+describe('MailCache search', () => {
+  const day = (month: number, date: number) => new Date(2026, month - 1, date, 12).toISOString()
+  const anna = { name: 'Anna Berg', email: 'anna.berg@example.org' }
+
+  beforeEach(() => {
+    cache.setFolders('a', [
+      { id: 'INBOX', name: 'Inbox', role: 'inbox' },
+      { id: 'Sent', name: 'Sent', role: 'sent' },
+      { id: 'INBOX.Projekte.Acme', name: 'Acme', role: 'custom' },
+    ])
+    cache.upsertMessages('a', 'INBOX', [
+      envelope(1, {
+        subject: 'Invoice March',
+        from: anna,
+        cc: [{ email: 'carol@example.org' }],
+        date: day(11, 1),
+        flagged: true,
+        hasAttachments: true,
+        attachmentNames: ['Rechnung März.pdf'],
+        size: 3 * 1024 * 1024,
+      }),
+      envelope(2, { subject: 'Lunch', to: [anna], date: day(11, 2), seen: true, answered: true }),
+      envelope(3, {
+        subject: 'Notes from Anna',
+        from: { email: 'carol@example.org' },
+        cc: [anna],
+        date: day(10, 15),
+        seen: true,
+        size: 500,
+      }),
+    ])
+    cache.upsertMessages('a', 'Sent', [
+      envelope(4, {
+        subject: 'Re: Lunch',
+        to: [{ email: 'bob@mailclient.test' }],
+        date: day(11, 3),
+      }),
+    ])
+    cache.upsertMessages('a', 'INBOX.Projekte.Acme', [
+      envelope(5, { subject: 'Acme kickoff', date: day(11, 4), seen: true }),
+    ])
+    cache.upsertMessages('b', 'INBOX', [envelope(1, { from: anna, subject: 'Other account' })])
+  })
+
+  it('finds plain words in any field, newest first, in one account', () => {
+    expect(find('a', 'anna')).toEqual([2, 1, 3])
+    expect(find('b', 'anna')).toEqual([1])
+  })
+
+  it('limits from:, to:, cc: and subject: to their field', () => {
+    expect(find('a', 'from:anna')).toEqual([1])
+    expect(find('a', 'from:anna.berg@example.org')).toEqual([1])
+    expect(find('a', 'from:"Anna Be"')).toEqual([1])
+    expect(find('a', 'from:@example.org')).toEqual([1, 3])
+    expect(find('a', 'to:anna')).toEqual([2, 3]) // To and Cc
+    expect(find('a', 'cc:anna')).toEqual([3])
+    expect(find('a', 'subject:anna')).toEqual([3])
+  })
+
+  it('finds attachment names, also without the body', () => {
+    expect(find('a', 'filename:marz')).toEqual([1])
+    expect(find('a', 'rechnung')).toEqual([1])
+    expect(find('a', 'has:attachment')).toEqual([1])
+  })
+
+  it('filters by status, date and size', () => {
+    expect(find('a', 'is:unread')).toEqual([4, 1])
+    expect(find('a', '-is:read')).toEqual([4, 1])
+    expect(find('a', 'is:flagged')).toEqual([1])
+    expect(find('a', 'is:replied')).toEqual([2])
+    expect(find('a', 'after:2026-11-03')).toEqual([5, 4])
+    expect(find('a', 'before:2026-11')).toEqual([3])
+    expect(find('a', 'date:2.11.2026')).toEqual([2])
+    expect(find('a', 'newer_than:3d', new Date(2026, 10, 4, 18))).toEqual([5, 4, 2])
+    expect(find('a', 'larger:2M')).toEqual([1])
+    expect(find('a', 'smaller:0.9K')).toEqual([3])
+  })
+
+  it('finds folders by role, name or path', () => {
+    expect(find('a', 'in:sent')).toEqual([4])
+    expect(find('a', 'in:inbox')).toEqual([2, 1, 3])
+    expect(find('a', 'in:acme')).toEqual([5])
+    expect(find('a', 'in:ac')).toEqual([5])
+    expect(find('a', 'folder:INBOX.Projekte.Acme')).toEqual([5])
+    expect(find('a', 'in:nowhere')).toEqual([])
+    expect(find('a', '-in:inbox')).toEqual([5, 4])
+  })
+
+  it('combines terms with OR, brackets and minus', () => {
+    expect(find('a', 'from:anna OR from:carol')).toEqual([1, 3])
+    expect(find('a', 'anna -from:anna')).toEqual([2, 3])
+    expect(find('a', '(lunch OR kickoff) -in:sent')).toEqual([5, 2])
+    expect(find('a', 'lunch is:read')).toEqual([2])
+  })
+
+  it('keeps attachment names when messages are put back', () => {
+    const saved = cache.snapshot('a', 'INBOX', [1])
+    cache.removeMessages('a', 'INBOX', [1])
+    expect(find('a', 'filename:rechnung')).toEqual([])
+    cache.restore('a', 'INBOX', saved)
+    expect(find('a', 'filename:rechnung')).toEqual([1])
+  })
+
+  it('keeps the folder list per account and forgets it with the account', () => {
+    expect(cache.folders('a').map((f) => f.id)).toEqual(['INBOX', 'INBOX.Projekte.Acme', 'Sent'])
+    cache.setFolders('a', [{ id: 'INBOX', name: 'Inbox', role: 'inbox' }])
+    expect(cache.folders('a')).toEqual([{ id: 'INBOX', name: 'Inbox', role: 'inbox' }])
+    cache.deleteAccount('a')
+    expect(cache.folders('a')).toEqual([])
   })
 })
 
@@ -138,13 +261,5 @@ describe('MailCache schema', () => {
     const second = new MailCache(path)
     expect(second.listMessages('a', 'INBOX')).toHaveLength(1)
     second.close()
-  })
-})
-
-describe('toSearchQuery', () => {
-  it('turns words into prefix terms and drops syntax', () => {
-    expect(toSearchQuery('Bob  "lunch" OR')).toBe('"bob"* "lunch"* "or"*')
-    expect(toSearchQuery('alice@mailclient.test')).toBe('"alice@mailclient.test"*')
-    expect(toSearchQuery('  ')).toBeNull()
   })
 })

@@ -2,13 +2,16 @@ import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { Flag, LoaderCircle, Paperclip, Reply, RotateCw, Search, SquarePen, X } from 'lucide-react'
 import {
   MESSAGE_LIST_LIMIT,
+  SEARCH_RESULT_LIMIT,
   type Folder,
   type MessageId,
   type MessageSummary,
 } from '@shared/types/mail'
 import { cn } from '../lib/cn'
 import { displayName, formatListDate } from '../lib/format'
+import { appendSearchTerm } from '../lib/search-text'
 import type { AsyncState } from '../lib/use-async'
+import { SearchHelp } from './SearchHelp'
 import { ToolbarButton } from './ToolbarButton'
 
 interface MessageListProps {
@@ -33,8 +36,14 @@ export interface SearchState {
   /** What's in the search field. */
   text: string
   onTextChange: (text: string) => void
-  /** True while results (not a folder) are listed. */
+  /** True while the list is for a search (not a folder). */
   active: boolean
+  /** Why the search can't run, e.g. "before: needs a date …"; shown instead of results. */
+  problems: string[]
+  /** The search has nothing to look for yet, e.g. just "from:". */
+  incomplete: boolean
+  /** False when the search names folders (in:); the summary then doesn't say "all folders". */
+  inAllFolders: boolean
   /** Name of a folder, shown on each result. */
   folderName: (folderId: string) => string | undefined
 }
@@ -58,7 +67,18 @@ export function MessageList({
   search,
 }: MessageListProps) {
   const listRef = useRef<HTMLUListElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
   const items = messages.status === 'ready' ? messages.data : []
+
+  /** Adds a term from the search help and puts the cursor after it. */
+  function addSearchTerm(term: string) {
+    const next = appendSearchTerm(search.text, term)
+    search.onTextChange(next)
+    const input = searchRef.current
+    if (!input) return
+    input.focus()
+    requestAnimationFrame(() => input.setSelectionRange(next.length, next.length))
+  }
 
   // Keep the selected row visible when moving with the keyboard.
   useEffect(() => {
@@ -97,7 +117,7 @@ export function MessageList({
           </h1>
           <p className="text-[11px] leading-tight text-ink-muted">
             {search.active
-              ? resultSummary(messages)
+              ? resultSummary(messages, search)
               : sync.status === 'running'
                 ? 'Checking for new mail…'
                 : folderSummary(folder)}
@@ -141,6 +161,7 @@ export function MessageList({
         <label className="flex h-7 items-center gap-1.5 rounded-md bg-ink/5 pr-1 pl-2 text-ink-faint focus-within:bg-paper focus-within:ring-1 focus-within:ring-accent">
           <Search className="size-3.5 shrink-0" strokeWidth={2} aria-hidden />
           <input
+            ref={searchRef}
             type="text"
             role="searchbox"
             value={search.text}
@@ -156,8 +177,11 @@ export function MessageList({
             placeholder="Search mail"
             aria-label="Search mail"
             spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
             className="w-full bg-transparent text-[12px] text-ink outline-none placeholder:text-ink-faint"
           />
+          <SearchHelp onAddTerm={addSearchTerm} />
           {search.text && (
             <button
               type="button"
@@ -174,10 +198,22 @@ export function MessageList({
 
       {messages.status === 'loading' && <ListNote>Loading messages…</ListNote>}
       {messages.status === 'error' && <ListNote>{messages.message}</ListNote>}
+      {search.active && search.problems.length > 0 && (
+        <ListNote role="status" tone="danger">
+          {search.problems.map((problem) => (
+            <span key={problem} className="block">
+              {problem}
+            </span>
+          ))}
+        </ListNote>
+      )}
+      {search.active && search.problems.length === 0 && search.incomplete && (
+        <ListNote>Add what to look for, like from:anna or is:unread.</ListNote>
+      )}
       {messages.status === 'ready' && items.length === 0 && search.active && (
         <ListNote>
-          No messages match “{search.text.trim()}”. Search covers subject, people and the text of
-          messages MailClient has downloaded, in all folders.
+          No messages match “{search.text.trim()}”. Search covers subject, people, attachment names
+          and the text of messages MailClient has downloaded.
         </ListNote>
       )}
       {messages.status === 'ready' &&
@@ -219,6 +255,12 @@ export function MessageList({
       {items.length >= MESSAGE_LIST_LIMIT && !search.active && (
         <p className="shrink-0 border-t border-line px-4 py-2 text-[11.5px] text-ink-muted">
           Showing the newest {MESSAGE_LIST_LIMIT.toLocaleString()} messages of this folder.
+        </p>
+      )}
+      {items.length >= SEARCH_RESULT_LIMIT && search.active && (
+        <p className="shrink-0 border-t border-line px-4 py-2 text-[11.5px] text-ink-muted">
+          Showing the newest {SEARCH_RESULT_LIMIT.toLocaleString()} matches. Add terms to narrow the
+          search.
         </p>
       )}
     </section>
@@ -333,14 +375,35 @@ function MessageRow({
   )
 }
 
-function ListNote({ children }: { children: ReactNode }) {
-  return <p className="border-t border-line px-4 py-6 text-[12.5px] text-ink-muted">{children}</p>
+function ListNote({
+  children,
+  role,
+  tone = 'muted',
+}: {
+  children: ReactNode
+  role?: 'status'
+  tone?: 'muted' | 'danger'
+}) {
+  return (
+    <p
+      role={role}
+      className={cn(
+        'border-t border-line px-4 py-6 text-[12.5px]',
+        tone === 'danger' ? 'text-danger' : 'text-ink-muted',
+      )}
+    >
+      {children}
+    </p>
+  )
 }
 
-function resultSummary(results: AsyncState<MessageSummary[]>): string {
+function resultSummary(results: AsyncState<MessageSummary[]>, search: SearchState): string {
+  if (search.problems.length > 0) return 'Check the search'
+  if (results.status === 'idle') return ' '
   if (results.status !== 'ready') return 'Searching…'
   const n = results.data.length
-  return `${n === 1 ? '1 message' : `${n.toLocaleString()} messages`} in all folders`
+  const count = n === 1 ? '1 message' : `${n.toLocaleString()} messages`
+  return search.inAllFolders ? `${count} in all folders` : count
 }
 
 function folderSummary(folder: Folder | undefined): string {
