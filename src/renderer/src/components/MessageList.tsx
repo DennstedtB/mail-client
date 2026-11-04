@@ -1,5 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
-import { Flag, LoaderCircle, Paperclip, Reply, RotateCw, Search } from 'lucide-react'
+import { Flag, LoaderCircle, Paperclip, Reply, RotateCw, Search, SquarePen } from 'lucide-react'
 import {
   MESSAGE_LIST_LIMIT,
   type Folder,
@@ -9,6 +9,7 @@ import {
 import { cn } from '../lib/cn'
 import { displayName, formatListDate } from '../lib/format'
 import type { AsyncState } from '../lib/use-async'
+import { ToolbarButton } from './ToolbarButton'
 
 interface MessageListProps {
   folder: Folder | undefined
@@ -20,6 +21,9 @@ interface MessageListProps {
   /** State of the sync with the server; the list itself always comes from the cache. */
   sync: SyncState
   onRefresh: () => void
+  onNewMessage: () => void
+  /** Why a new message can't be written, e.g. in the sample mailbox. */
+  newMessageUnavailable?: string
 }
 
 export type SyncState =
@@ -35,6 +39,8 @@ export function MessageList({
   today,
   sync,
   onRefresh,
+  onNewMessage,
+  newMessageUnavailable,
 }: MessageListProps) {
   const listRef = useRef<HTMLUListElement>(null)
   const items = messages.status === 'ready' ? messages.data : []
@@ -88,6 +94,14 @@ export function MessageList({
               <RotateCw className="size-4" strokeWidth={1.75} aria-hidden />
             )}
           </button>
+        )}
+        {folder && (
+          <ToolbarButton
+            icon={SquarePen}
+            label="New message"
+            unavailableReason={newMessageUnavailable}
+            onClick={onNewMessage}
+          />
         )}
       </header>
       {sync.status === 'error' && (

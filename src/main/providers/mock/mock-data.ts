@@ -54,12 +54,15 @@ everything in this mailbox is sample data. It's shown until you add your own acc
 
 What works now:
 - adding an IMAP/SMTP account: MailClient checks both servers first and keeps the password in the macOS Keychain
-- your account's real folders in the sidebar, with unread counts
-- the three-pane layout, arrow keys in the message list, light and dark mode
+- reading your mail: HTML messages are shown safely with remote images blocked, attachments open or save, new mail arrives by push
+- writing: new messages, reply, reply all and forward, with attachments; a copy goes to Sent
+- arrow keys in the message list, light and dark mode
 
 What comes next:
-- M2: read your real mail, with HTML messages rendered safely and remote images blocked
-- M3: write, reply, forward and send
+- M4: mark as read or unread, flag, move, delete and search
+- M5: the calendar
+
+Writing needs your own account: the sample mailbox can't send.
 
 Use "Add account" in the sidebar to get started. While developing, the dialog can fill in the local test server for you.`,
   },

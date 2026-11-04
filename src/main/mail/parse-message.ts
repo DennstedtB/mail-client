@@ -12,6 +12,7 @@ export interface ParsedMessage {
   messageId?: string
   inReplyTo?: string
   references: string[]
+  replyTo: Address[]
   to: Address[]
   cc: Address[]
 }
@@ -81,6 +82,7 @@ export async function parseMessage(source: Buffer): Promise<ParsedMessage> {
     messageId: parsed.messageId,
     inReplyTo: parsed.inReplyTo,
     references,
+    replyTo: addresses(parsed.replyTo),
     to: addresses(parsed.to),
     cc: addresses(parsed.cc),
   }
